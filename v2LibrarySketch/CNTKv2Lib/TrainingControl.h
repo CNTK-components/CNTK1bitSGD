@@ -18,7 +18,7 @@ namespace CNTK
     public:
         // Optional callback that gets called before each minbatch during training
         // This also controls the duration of the training through its return value; false indicates end of training
-        virtual bool PerMinibatchCallback(const Trainer& trainer);
+        virtual bool PreMinibatchCallback(const Trainer& trainer);
 
         // TODO: Do we need a callback for after each minibatch too?
 

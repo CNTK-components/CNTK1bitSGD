@@ -146,12 +146,11 @@
     <ClInclude Include="Common.h" />
     <ClInclude Include="Function.h" />
     <ClInclude Include="Distributed.h" />
-    <ClInclude Include="Reader.h" />
+    <ClInclude Include="MinibatchSource.h" />
     <ClInclude Include="TrainingControl.h" />
     <ClInclude Include="Value.h" />
     <ClInclude Include="Variable.h" />
     <ClInclude Include="Learner.h" />
-    <ClInclude Include="Model.obsolete.h" />
     <ClInclude Include="NDArrayView.h" />
     <ClInclude Include="Trainer.h" />
   </ItemGroup>

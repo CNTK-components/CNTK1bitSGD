@@ -23,20 +23,23 @@ namespace CNTK
         DistributedCommunicator SubGroup(const std::unordered_set<DistributedWorkerDescriptor>& subGroupWorkers) const;
 
         // A collective communication API to concatenate values across each worker of this communicator. The concatenated values are only sent to the specified workers; for all others the returned Values are null
+        // TODO: Add an async variant of the Concatenate method
         std::unordered_set<Value> Concatenate(const std::unordered_set<Value>& values, const std::unordered_set<DistributedWorkerDescriptor>& sendToWorkers, DeviceDescriptor device = DeviceDescriptor::DefaultDevice());
 
         // A collective communication API to aggregate values across each worker of this communicator. The agrregated values are only sent to the specified workers; for all others the returned Values are null
+        // TODO: Add an async variant of the Aggregate method
         void Aggregate(const std::unordered_set<Value>& inValues,
                        const std::unordered_set<DistributedWorkerDescriptor>& sendToWorkers, 
-                       const std::unordered_map<Variable, Value>& aggregatedOutputs,
+                       const std::unordered_set<Value>& aggregatedOutputs,
                        DeviceDescriptor device = DeviceDescriptor::DefaultDevice());
 
         // A collective communication API to perform quantized aggregation of values across all workers of this communicator
+        // TODO: Add an async variant of the QuantizedAggregate method
         void QuantizedAggregate(const std::unordered_set<Value>& inValues,
                                 const std::unordered_set<Value>& inPreviousQuantizationResidues,
                                 const std::unordered_set<DistributedWorkerDescriptor>& sendToWorkers,
-                                const std::unordered_map<Variable, Value>& aggregatedOutputs,
-                                const std::unordered_map<Variable, Value>& newQuantizationResidues,
+                                const std::unordered_set<Value>& aggregatedOutputs,
+                                const std::unordered_set<Value>& newQuantizationResidues,
                                 DeviceDescriptor device = DeviceDescriptor::DefaultDevice());
 
         DistributedCommunicator() = delete;
@@ -50,13 +53,13 @@ namespace CNTK
     public:
 
         // Optional override that gets called per minibatch after finishing gradient computation but before updating model parameters
-        virtual void PreParameterUpdateCallback(const Trainer& trainer, const std::unordered_map<Variable, const Value>& gradientValues);
+        virtual void PreParameterUpdateCallback(const Trainer& trainer, const std::unordered_map<Variable, Value>& gradientValues);
 
         // Optional override that gets called before each minbatch during training
-        virtual void PerMinibatchCallback(const Trainer& trainer);
+        virtual void PreMinibatchCallback(const Trainer& trainer);
 
-        // Optionally overridable method to checkpoint any state associated with this Distributed train method
-        virtual Dictionary Checkpoint() const;
+        // Optionally overridable method to get checkpoint state associated with this Distributed train method
+        virtual Dictionary GetCheckpointState() const;
 
         // Optionally overridable method to restore state pertaining this distributed training method from a previous checkpoint
         virtual void RestoreFromCheckpoint(const Dictionary& checkpoint);
@@ -76,6 +79,12 @@ namespace CNTK
     DistributedCommunicator MPICommunicator();
 
     // Builtin distributed training methods
+
+    // Per minibatch synchronous data-parallel training that aggregates gradients computed across all workers
     DistributedTrainPtr DataParallel(DistributedCommunicator communicator, size_t numGradientQuantizationLevels, bool useAsyncBufferedParameterUpdate = false);
-    DistributedTrainPtr ModelParallel(DistributedCommunicator communicator, size_t averagingFrequency);
+
+    // Model Averaging; TODO: Add Block-momentum support
+    DistributedTrainPtr ModelAveraging(DistributedCommunicator communicator, size_t averagingFrequency);
+
+    // TODO: Model parallelism
 }

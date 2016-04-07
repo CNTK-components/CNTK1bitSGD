@@ -25,7 +25,7 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
-    <ConfigurationType>Application</ConfigurationType>
+    <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>v120</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
@@ -145,12 +145,16 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="1BitSGDTraining.cpp" />
     <ClCompile Include="CustomNDCGTrainingCriterion.cpp" />
     <ClCompile Include="DisjointModelsCoTraining.cpp" />
     <ClCompile Include="ResNet34ImageClassifier.cpp" />
     <ClCompile Include="Seq2SeqWithAttention.cpp" />
     <ClCompile Include="FeedForwardClassfier.cpp" />
     <ClCompile Include="LSTMClassifier.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Common.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

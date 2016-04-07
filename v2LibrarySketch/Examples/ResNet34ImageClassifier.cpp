@@ -47,15 +47,14 @@ FunctionPtr ResNetNode2BInc(Variable input, size_t outFeatureMapCount, size_t ke
     return CNTK::ReLU(CNTK::Plus(conv2, cProj));
 }
 
-FunctionPtr ResNet34ClassifierNet(const NDShape& inputImageShape, size_t numOutputClasses)
+FunctionPtr ResNet34ClassifierNet(Variable input, size_t numOutputClasses)
 {
     double conv1WScale = 0.6;
     double convBValue = 0;
     double scValue = 1;
     size_t cMap1 = 64;
     size_t bnTimeConst = 4096;
-    Variable imageInput(inputImageShape, L"Images");
-    auto conv1 = ConvBNReLULayer(imageInput, cMap1, 7, 7, 2, 2, conv1WScale, convBValue, scValue, bnTimeConst);
+    auto conv1 = ConvBNReLULayer(input, cMap1, 7, 7, 2, 2, conv1WScale, convBValue, scValue, bnTimeConst);
 
     // Max pooling
     size_t pool1W = 3;
@@ -104,21 +103,22 @@ FunctionPtr ResNet34ClassifierNet(const NDShape& inputImageShape, size_t numOutp
     return CNTK::Plus(CNTK::Times(outTimesParams, rootFunction), outBiasParams);
 }
 
-void TrainImageClassifier(ReaderPtr imageReader)
+void TrainImageClassifier(MinibatchSourcePtr imageMinibatchSource)
 {
-    StreamDescription imagesStreamDesc = CNTK::GetStreamDescription(imageReader, L"Images");
+    StreamDescription imagesStreamDesc = CNTK::GetStreamDescription(imageMinibatchSource, L"Images");
     auto inputImageShape = imagesStreamDesc.m_sampleLayout;
 
-    StreamDescription labelsStreamDesc = CNTK::GetStreamDescription(imageReader, L"Labels");
+    StreamDescription labelsStreamDesc = CNTK::GetStreamDescription(imageMinibatchSource, L"Labels");
     const size_t numOutputClasses = labelsStreamDesc.m_sampleLayout[0];
 
     const size_t numLSTMLayers = 3;
     const size_t cellDim = 1024;
     const size_t hiddenDim = 512;
 
-    auto classifierOutputFunction = ResNet34ClassifierNet(inputImageShape, numOutputClasses);
+    Variable imageInput(inputImageShape, L"Images");
+    auto classifierOutputFunction = ResNet34ClassifierNet(imageInput, numOutputClasses);
 
-    Variable labelsVar = Variable({ numOutputClasses }, L"Labels");
+    auto labelsVar = Variable({ numOutputClasses }, L"Labels");
 
     auto trainingLossFunction = CNTK::CrossEntropyWithSoftmax(classifierOutputFunction, labelsVar, L"lossFunction");
     auto predictionFunction = CNTK::PredictionError(classifierOutputFunction, labelsVar, L"predictionError");
@@ -129,9 +129,9 @@ void TrainImageClassifier(ReaderPtr imageReader)
     double learningRatePerSample = 0.05;
 
     // Train for 100000 samples; checkpoint every 10000 samples
-    TrainingControlPtr driver = CNTK::BasicTrainingControl(100000, 10000, { L"LSTMClassifier.net", L"LSTMClassifier.ckp" });
+    auto driver = CNTK::BasicTrainingControl(100000, 10000, { L"LSTMClassifier.net", L"LSTMClassifier.ckp" });
     Trainer imageClassifierTrainer(imageClassifier, trainingLossFunction, { CNTK::SGDLearner(imageClassifier->Parameters(), learningRatePerSample, momentumTimeConstant) });
 
-    std::unordered_map<Variable, StreamDescription> modelArgumentToReaderStreamMap = { { classifierOutputFunction->Argument(), imagesStreamDesc }, { labelsVar, labelsStreamDesc } };
-    imageClassifierTrainer.Train(imageReader, modelArgumentToReaderStreamMap, driver);
+    std::unordered_map<Variable, StreamDescription> modelArgumentToMinibatchSourceStreamMap = { { imageInput, imagesStreamDesc }, { labelsVar, labelsStreamDesc } };
+    imageClassifierTrainer.Train(imageMinibatchSource, modelArgumentToMinibatchSourceStreamMap, driver);
 }

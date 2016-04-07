@@ -4,12 +4,13 @@
 #include "Trainer.h"
 #include <assert.h>
 #include <algorithm>
+#include "Common.h"
 
 using namespace CNTK;
 
-std::pair<FunctionPtr, FunctionPtr> LSTMPCellWithSelfStab(Variable input,
-                                                          Variable prevOutput,
-                                                          Variable prevCellState)
+std::pair<FunctionPtr, FunctionPtr> LSTMPCellWithSelfStabilization(Variable input,
+                                                                   Variable prevOutput,
+                                                                   Variable prevCellState)
 {
     assert(input.Shape().size() == 1);
     size_t inputDim = input.Shape()[0];
@@ -40,21 +41,21 @@ std::pair<FunctionPtr, FunctionPtr> LSTMPCellWithSelfStab(Variable input,
 
     auto Wmr = CNTK::Parameter(CNTK::RandomUniform({ outputDim, cellDim }, -0.5, 0.5), L"WmrParam");
 
-    auto sWxo = CNTK::Parameter(CNTK::Constant({ 1, 1 }, 0.0), L"sWxoParam");
-    auto sWxi = CNTK::Parameter(CNTK::Constant({ 1, 1 }, 0.0), L"sWxiParam");
-    auto sWxf = CNTK::Parameter(CNTK::Constant({ 1, 1 }, 0.0), L"sWxfParam");
-    auto sWxc = CNTK::Parameter(CNTK::Constant({ 1, 1 }, 0.0), L"sWxcParam");
+    auto sWxo = CNTK::Parameter(0.0, L"sWxoParam");
+    auto sWxi = CNTK::Parameter(0.0, L"sWxiParam");
+    auto sWxf = CNTK::Parameter(0.0, L"sWxfParam");
+    auto sWxc = CNTK::Parameter(0.0, L"sWxcParam");
 
-    auto sWhi = CNTK::Parameter(CNTK::Constant({ 1, 1 }, 0.0), L"sWhiParam");
-    auto sWci = CNTK::Parameter(CNTK::Constant({ 1, 1 }, 0.0), L"sWciParam");
+    auto sWhi = CNTK::Parameter(0.0, L"sWhiParam");
+    auto sWci = CNTK::Parameter(0.0, L"sWciParam");
 
-    auto sWhf = CNTK::Parameter(CNTK::Constant({ 1, 1 }, 0.0), L"sWhfParam");
-    auto sWcf = CNTK::Parameter(CNTK::Constant({ 1, 1 }, 0.0), L"sWcfParam");
-    auto sWho = CNTK::Parameter(CNTK::Constant({ 1, 1 }, 0.0), L"sWhoParam");
-    auto sWco = CNTK::Parameter(CNTK::Constant({ 1, 1 }, 0.0), L"sWcoParam");
-    auto sWhc = CNTK::Parameter(CNTK::Constant({ 1, 1 }, 0.0), L"sWhcParam");
+    auto sWhf = CNTK::Parameter(0.0, L"sWhfParam");
+    auto sWcf = CNTK::Parameter(0.0, L"sWcfParam");
+    auto sWho = CNTK::Parameter(0.0, L"sWhoParam");
+    auto sWco = CNTK::Parameter(0.0, L"sWcoParam");
+    auto sWhc = CNTK::Parameter(0.0, L"sWhcParam");
 
-    auto sWmr = CNTK::Parameter(CNTK::Constant({ 1, 1 }, 0.0), L"sWmrParam");
+    auto sWmr = CNTK::Parameter(0.0, L"sWmrParam");
 
     auto expsWxo = CNTK::Exp(sWxo);
     auto expsWxi = CNTK::Exp(sWxi);
@@ -74,7 +75,7 @@ std::pair<FunctionPtr, FunctionPtr> LSTMPCellWithSelfStab(Variable input,
 
     auto Wxix = CNTK::Times(Wxi, CNTK::Scale(expsWxi, input));
     auto Whidh = CNTK::Times(Whi, CNTK::Scale(expsWhi, prevOutput));
-    auto Wcidc = CNTK::DiagTimes(Wci, CNTK::Scale(expsWci, prevCellState));
+    auto Wcidc = CNTK::ElementTimes(Wci, CNTK::Scale(expsWci, prevCellState));
 
     auto it = CNTK::Sigmoid(CNTK::Plus(CNTK::Plus(CNTK::Plus(Wxix, Bi), Whidh), Wcidc));
 
@@ -84,7 +85,7 @@ std::pair<FunctionPtr, FunctionPtr> LSTMPCellWithSelfStab(Variable input,
 
     auto Wxfx = CNTK::Times(Wxf, CNTK::Scale(expsWxf, input));
     auto Whfdh = CNTK::Times(Whf, CNTK::Scale(expsWhf, prevOutput));
-    auto Wcfdc = CNTK::DiagTimes(Wcf, CNTK::Scale(expsWcf, prevCellState));
+    auto Wcfdc = CNTK::ElementTimes(Wcf, CNTK::Scale(expsWcf, prevCellState));
 
     auto ft = CNTK::Sigmoid(CNTK::Plus(CNTK::Plus(CNTK::Plus(Wxfx, Bf), Whfdh), Wcfdc));
 
@@ -94,7 +95,7 @@ std::pair<FunctionPtr, FunctionPtr> LSTMPCellWithSelfStab(Variable input,
 
     auto Wxox = CNTK::Times(Wxo, CNTK::Scale(expsWxo, input));
     auto Whodh = CNTK::Times(Who, CNTK::Scale(expsWho, prevOutput));
-    auto Wcoct = CNTK::DiagTimes(Wco, CNTK::Scale(expsWco, ct));
+    auto Wcoct = CNTK::ElementTimes(Wco, CNTK::Scale(expsWco, ct));
 
     auto ot = CNTK::Sigmoid(CNTK::Plus(CNTK::Plus(CNTK::Plus(Wxox, Bo), Whodh), Wcoct));
 
@@ -103,16 +104,14 @@ std::pair<FunctionPtr, FunctionPtr> LSTMPCellWithSelfStab(Variable input,
     return { CNTK::Times(Wmr, CNTK::Scale(expsWmr, mt)), ct };
 }
 
-FunctionPtr EncoderSubNet(size_t inputDim, size_t cellDim, size_t hiddenDim)
+FunctionPtr EncoderSubNet(Variable sourceInput, size_t cellDim, size_t hiddenDim)
 {
-    Variable sourceInput({ inputDim }, L"Source");
-
     auto outputPlaceholder = Variable({ hiddenDim }, L"outputPlaceHolder");
-    auto dh = CNTK::PastValue(CNTK::Constant(outputPlaceholder.Shape(), 0.0), outputPlaceholder, L"OutputPastValue");
+    auto dh = CNTK::PastValue(0.0, outputPlaceholder, L"OutputPastValue");
     auto ctPlaceholder = Variable({ cellDim }, L"ctPlaceHolder");
-    auto dc = CNTK::PastValue(CNTK::Constant(ctPlaceholder.Shape(), 0.0), ctPlaceholder, L"CellPastValue");
+    auto dc = CNTK::PastValue(0.0, ctPlaceholder, L"CellPastValue");
 
-    auto LSTMCell = LSTMPCellWithSelfStab(sourceInput, dh, dc);
+    auto LSTMCell = LSTMPCellWithSelfStabilization(sourceInput, dh, dc);
 
     // Form the recurrence loop by connecting the output and cellstate back to the inputs of the respective PastValue nodes
     return CNTK::Composite(LSTMCell.first, { { outputPlaceholder, LSTMCell.first }, { ctPlaceholder, LSTMCell.second } });
@@ -140,26 +139,24 @@ FunctionPtr Attention(Variable encoderStates, Variable decoderState)
 }
 
 // Note that this is just for training where we use an input target sentence to drive the decoder instead of its own output from previous step
-FunctionPtr DecoderWithAttention(Variable encoderStates, size_t outputDim, size_t cellDim)
+FunctionPtr DecoderWithAttention(Variable targetInput, Variable encoderStates, size_t cellDim)
 {
     // The decoder is a recurrent network that uses attention over the hidden states of the encoder emitted for each step of the source sequence
-
-    Variable targetInput({ outputDim }, L"Target");
 
     // Compute the context vector using attention over the encoderStates
     auto ctPlaceholder = Variable({ cellDim }, L"ctPlaceHolder");
     auto dc = CNTK::PastValue(CNTK::Constant(ctPlaceholder.Shape(), 0.0), ctPlaceholder, L"CellPastValue");
 
     auto context = Attention(encoderStates, dc);
-    auto LSTMCell = LSTMPCellWithSelfStab(context, targetInput, dc);
+    auto LSTMCell = LSTMPCellWithSelfStabilization(context, targetInput, dc);
 
     // Form the recurrence loop by connecting the cellstate back to the input of the PastValue node
     return CNTK::Composite(LSTMCell.first, { { ctPlaceholder, LSTMCell.second } });
 }
 
-FunctionPtr EncoderDecoderWithAttention(size_t inputDim, size_t cellDim, size_t hiddenDim, size_t outputDim)
+FunctionPtr EncoderDecoderWithAttention(Variable sourceInput, Variable targetInput, size_t cellDim, size_t hiddenDim)
 {
-    auto encoderFunction = EncoderSubNet(inputDim, cellDim, hiddenDim);
+    auto encoderFunction = EncoderSubNet(sourceInput, cellDim, hiddenDim);
 
     // Each Variable has a Shape (denoting the shape of a sample) and one implicit sequence dimension(s) denoting the fixed or variable lengths of
     // the sequence that the Variable denotes.
@@ -170,23 +167,24 @@ FunctionPtr EncoderDecoderWithAttention(size_t inputDim, size_t cellDim, size_t 
     newShape.insert(newShape.end(), encoderFunction->Output().Shape().begin(), encoderFunction->Output().Shape().end());
     auto encoderStates = CNTK::Reshape(encoderFunction, -1, (int)encoderFunction->Output().Shape().size(), newShape);
 
-    return DecoderWithAttention(encoderStates, outputDim, cellDim);
+    return DecoderWithAttention(targetInput, encoderStates, cellDim);
 }
 
-void TrainEncoderDecoder(ReaderPtr trainingDataReader)
+void TrainEncoderDecoder(MinibatchSourcePtr trainingDataMinibatchSource)
 {
-    StreamDescription sourceSequenceStreamDesc = CNTK::GetStreamDescription(trainingDataReader, L"Source");
+    StreamDescription sourceSequenceStreamDesc = CNTK::GetStreamDescription(trainingDataMinibatchSource, L"Source");
     const size_t inputDim = sourceSequenceStreamDesc.m_sampleLayout[0];
+    Variable sourceInput({ inputDim }, L"Source");
 
-    StreamDescription targetSequenceStreamDesc = CNTK::GetStreamDescription(trainingDataReader, L"Target");
+    StreamDescription targetSequenceStreamDesc = CNTK::GetStreamDescription(trainingDataMinibatchSource, L"Target");
     const size_t outputDim = targetSequenceStreamDesc.m_sampleLayout[0];
+    Variable targetInput({ outputDim }, L"Target");
 
     const size_t cellDim = 1024;
     const size_t hiddenDim = 512;
-    auto encoderDecoderNetOutputFunction = EncoderDecoderWithAttention(inputDim, cellDim, hiddenDim, outputDim);
+    auto encoderDecoderNetOutputFunction = EncoderDecoderWithAttention(sourceInput, targetInput, cellDim, hiddenDim);
 
-    Variable labelsVar = Variable({ outputDim }, L"Target");
-    auto trainingLossFunction = CNTK::CrossEntropyWithSoftmax(encoderDecoderNetOutputFunction, labelsVar, L"lossFunction");
+    auto trainingLossFunction = CNTK::CrossEntropyWithSoftmax(encoderDecoderNetOutputFunction, targetInput, L"lossFunction");
     auto trainingNet = trainingLossFunction;
 
     size_t momentumTimeConstant = 1024;
@@ -196,6 +194,6 @@ void TrainEncoderDecoder(ReaderPtr trainingDataReader)
     TrainingControlPtr driver = CNTK::BasicTrainingControl(100000, 10000, { L"EncoderDecoderWithAttn.net", L"EncoderDecoderWithAttn.ckp" });
     Trainer encoderDecoderTrainer(trainingNet, trainingLossFunction, { CNTK::SGDLearner(trainingNet->Parameters(), learningRatePerSample, momentumTimeConstant) });
 
-    std::unordered_map<Variable, StreamDescription> modelArgumentToReaderStreamMap = { { encoderDecoderNetOutputFunction->Argument(), sourceSequenceStreamDesc }, { labelsVar, targetSequenceStreamDesc } };
-    encoderDecoderTrainer.Train(trainingDataReader, modelArgumentToReaderStreamMap, driver);
+    std::unordered_map<Variable, StreamDescription> modelArgumentToMinibatchSourceStreamMap = { { sourceInput, sourceSequenceStreamDesc }, { targetInput, targetSequenceStreamDesc } };
+    encoderDecoderTrainer.Train(trainingDataMinibatchSource, modelArgumentToMinibatchSourceStreamMap, driver);
 }

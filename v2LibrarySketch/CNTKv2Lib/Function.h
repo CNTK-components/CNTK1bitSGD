@@ -31,7 +31,7 @@ namespace CNTK
     class Dictionary;
     
     // Represents a function (optionally differentiable)
-    // A function is a symbolic entity with zero or more input parameters and one or more outputs. 
+    // A function is a symbolic entity with zero or more input arguments and one or more outputs. 
     // A function may be primitive or composite (comprised of other function instances whose inputs and outputs are wired together in some form)
     // Note that above definition is recursive and effectively means that a function is an arbitrary graph composed of other primitive functions
     class Function
@@ -61,13 +61,13 @@ namespace CNTK
         // The 'state' parameter is an instance of an BackPropState instance obtained from a previous call to the EvaluateForBackProp method on this Function instance for the 
         // computation that this gradient backpropagation corresponds to.
         virtual void Backward(BackPropState state,
-                              const std::unordered_map<Variable, const Value> rootGradientValues,
+                              const std::unordered_map<Variable, Value> rootGradientValues,
                               const std::unordered_map<Variable, Value>& backPropagatedGradientValuesForInputs) = 0;
 
     public:
         // Optionally overridable methods
 
-        // An optionally overridable method that specifies to which of the Function's inputs are gradient values from outputs, backpropagted to. 
+        // An optionally overridable method that specifies which inputs does this function backpropagate gradients to. 
         // By default a function is assumed to backpropgate gradients to all of its inputs
         virtual std::unordered_set<Variable> InputsBackPropagatedTo();
 
@@ -94,51 +94,45 @@ namespace CNTK
         virtual FunctionPtr Clone() const;
 
     public:
-        // First Output variable
+        // First Output variable; i.e. Outputs()[0]
+        // TODO: Throw an exception when called for a function with multiple outputs?
         Variable Output() const;
 
-        // First Argument variable (i.e. input that is neither a Parameter nor a Constant)
-        Variable Argument() const;
-
-        // First Parameter Variable
-        Variable Parameter() const;
-
-        // Conversion operator that returns the first Output variable of the function, to be used as convenience for building composite functions
-        operator Variable() const
-        {
-            return Output();
-        }
+        // Conversion operator that returns the first Output variable of the function; i.e. Outputs()[0]
+        // TODO: Throw an exception when called for a function with multiple outputs?
+        operator Variable() const;
 
         std::wstring Name() const;
 
         // Returns the Function at the root of the graph of Functions underlying this Function
-        // If this is a primitive function (this->RootFunction() == this)
+        // If this is a primitive function then (this->RootFunction() == this)
         FunctionPtr RootFunction() const;
 
-        // All output variables whose names contain a substring matching the specified regular expression
-        std::unordered_set<Variable> Outputs(const std::wstring& nameFilterRegex = L"");
+        // All Output variables
+        std::vector<Variable> Outputs() const;
 
-        // All input vars (leaf descendants) whose names contain a substring matching the specified regular expression
-        std::unordered_set<Variable> Arguments(const std::wstring& nameFilterRegex = L"");
+        // All input variables (inlcudes 'Parameter' and 'Constant' inputs)
+        std::vector<Variable> Inputs() const;
 
-        // All parameter vars (leaf descendants) whose names contain a substring matching the specified regular expression
-        std::unordered_set<Variable> Parameters(const std::wstring& nameFilterRegex = L"");
+        // All input variables that are not 'Parameter's or 'Constant's and constitute the Arguments of the function
+        std::vector<Variable> Arguments() const;
 
-        // TODO: Method to return 'Constant' input variables too
+        // All Parameter variables
+        std::unordered_set<Variable> Parameters() const;
 
-        // TODO: A bevy of helper methods to reflect on the Function's underlying graph structure
+        // TODO: Methods to reflect on the Function's underlying graph structure
         // Provide the ability to "Visit" the graph, which can be used to achieve model editing functionality 
 
     protected:
         // Protected ctor for derived 'Function' ctors to specify the actual input parameters and shapes of outputs for a function instance.
         // All 'inputs; specified must be Variables of type Constant, Parameter or Input
-        Function(const std::unordered_set<Variable>& inputs, const std::vector<NDShape>& outputShapes, const std::wstring& name = L"");
+        Function(const std::vector<Variable>& inputs, const std::vector<NDShape>& outputShapes, const std::wstring& name = L"");
 
         DISALLOW_COPY_CTOR_AND_ASSIGNMENT(Function);
         DISALLOW_MOVE_CTOR_AND_ASSIGNMENT(Function);
     };
 
-    // Built-in Functions
+    // Methods to instantiate built-in CNTK functions
     FunctionPtr Times(const Variable& leftOperand, const Variable& rightOperand, const std::wstring& name = L"");
     FunctionPtr Plus(const Variable& leftOperand, const Variable& rightOperand, const std::wstring& name = L"");
     FunctionPtr ReLU(const Variable& operand, const std::wstring& name = L"");
@@ -148,8 +142,7 @@ namespace CNTK
     FunctionPtr PredictionError(const Variable& prediction, const Variable& labels, const std::wstring& name = L"");
     FunctionPtr Exp(const Variable& operand, const std::wstring& name = L"");
     FunctionPtr PastValue(const Variable& initialState, const Variable& operand, const std::wstring& name = L"");
-    FunctionPtr Scale(const Variable& scaleFactor, const Variable& operand, const std::wstring& name = L"");
-    FunctionPtr DiagTimes(const Variable& leftOperand, const Variable& rightOperand, const std::wstring& name = L"");
+    //FunctionPtr DiagTimes(const Variable& leftOperand, const Variable& rightOperand, const std::wstring& name = L"");
     FunctionPtr ElementTimes(const Variable& leftOperand, const Variable& rightOperand, const std::wstring& name = L"");
     FunctionPtr Convolution(const Variable& convolutionMap, const Variable& operand, const NDShape& strides, bool zeroPadding = false, const std::wstring& name = L"");
     FunctionPtr BatchNormalization(const Variable& operand, const Variable& scale, const Variable& bias, const Variable& runningMean, const Variable& runningInvStd, bool spacial, size_t bnTimeConstant, double epsilon, const std::wstring& name = L"");
@@ -164,15 +157,27 @@ namespace CNTK
     FunctionPtr Softmax(const Variable& operand, int axis = 0);
     FunctionPtr Reshape(const Variable& operand, int beginAxis, int endAxis, const NDShape& newShape);
 
-    // Method to create a Composite function by wiring the inputs of a specified function with new Variables 
-    // which in turn may be outputs of other Functions
+    FunctionPtr Gather(const Variable& gatherFrom, const Variable& gatherIndices, const std::wstring& name = L"");
+
+    FunctionPtr RowStack(const Variable& top, const Variable& bottom, const std::wstring& name = L"");
+
+    FunctionPtr Sum(const Variable& operand, int reductionAxis = 0, const std::wstring& name = L"");
+    FunctionPtr Average(const Variable& operand, int reductionAxis = 0, const std::wstring& name = L"");
+
+    // Method to create a Composite function whose root is a clone of the specified 'rootFunction' and the inputs of the root function are wired to the specified
+    // 'rootFunctionInputsConnections' map to effectively compose a graph. Note that specified rootFunctionInputsConnections may be outputs of other Functions.
     // Note that this does not modify the supplied 'rootFunction'
     FunctionPtr Composite(FunctionPtr rootFunction, const std::unordered_map<Variable, Variable>& rootFunctionInputsConnections, const std::wstring& name = L"");
 
     // Create a block function wrapping a specified function whose Output variables are distinct aliases of the specified root function 
     // such that the block retains its identity when composed with other functions
+    // This is to enable creating a given composite function as a Block that appears as a primitive when traversing a graph of Functions.
+    // For e.g.one could take a LSTM loop and create a block out of it and stack multiple of these blocks together.Now when traversing this structure,
+    // this will appear as a feed forward network with 3 of these block functions chained.
     FunctionPtr Block(FunctionPtr rootFunction, const std::wstring& name);
 
     // Create a new combined function whose inputs and outputs are the union of the inputs of the specified set of rootFunctions
+    // This can be used to combine multiple functions into a single function
+    // E.g. The function to train for a classification problem is a combination of the training loss function and an error prediciton function
     FunctionPtr Combined(std::unordered_set<FunctionPtr> rootFunctions, const std::wstring& name = L"");
 }

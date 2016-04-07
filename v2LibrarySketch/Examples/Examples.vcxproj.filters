@@ -33,5 +33,13 @@
     <ClCompile Include="ResNet34ImageClassifier.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="1BitSGDTraining.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Common.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
