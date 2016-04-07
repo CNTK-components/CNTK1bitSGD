@@ -154,15 +154,19 @@ namespace CNTK
     };
     FunctionPtr Pooling(const Variable& operand, PoolingType poolingType, const NDShape& poolingWindowShape, const NDShape& strides, const std::vector<bool>& autoPadding = {} /* defaults to no padding */, const std::wstring& name = L"");
 
-    FunctionPtr Softmax(const Variable& operand, int axis = 0);
-    FunctionPtr Reshape(const Variable& operand, int beginAxis, int endAxis, const NDShape& newShape);
+    FunctionPtr Softmax(const Variable& operand);
+
+    // Overload to perform SoftMax reduction along the specified axis
+    FunctionPtr Softmax(const Variable& operand, AxisId reductionAxis);
+
+    FunctionPtr Reshape(const Variable& operand, size_t beginAxis, size_t endAxis, const NDShape& newShape);
 
     FunctionPtr Gather(const Variable& gatherFrom, const Variable& gatherIndices, const std::wstring& name = L"");
 
     FunctionPtr RowStack(const Variable& top, const Variable& bottom, const std::wstring& name = L"");
 
-    FunctionPtr Sum(const Variable& operand, int reductionAxis = 0, const std::wstring& name = L"");
-    FunctionPtr Average(const Variable& operand, int reductionAxis = 0, const std::wstring& name = L"");
+    FunctionPtr Sum(const Variable& operand, AxisId reductionAxis = 0, const std::wstring& name = L"");
+    FunctionPtr Average(const Variable& operand, AxisId reductionAxis = 0, const std::wstring& name = L"");
 
     // Method to create a Composite function whose root is a clone of the specified 'rootFunction' and the inputs of the root function are wired to the specified
     // 'rootFunctionInputsConnections' map to effectively compose a graph. Note that specified rootFunctionInputsConnections may be outputs of other Functions.

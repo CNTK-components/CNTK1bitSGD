@@ -7,6 +7,21 @@
 
 namespace CNTK
 {
+    // Denotes an Axis of a Variable and is used for specifying the axes parameters of certain built-in fucntions such as reductions
+    // Note that besides the axes corresponding to each of the ranks of the Variable's shape, a Variable (except for Parameter and Constants)
+    // also has zero or more implicit sequence axes (corresponding to the sequence dimensions) and one implicit batch axes corresponding 
+    // to the batching of multiple samples in input Values processed by a Function
+    class AxisId
+    {
+    public:
+        AxisId(size_t rankId);
+        static AxisId DefaultSequenceAxis;
+        static AxisId BatchAxisId;
+        static AxisId NewAxis(const std::wstring& name = L"");
+
+        std::wstring Name();
+    };
+
     enum class VariableType
     {
         Constant,
@@ -26,6 +41,10 @@ namespace CNTK
         Variable(const NDShape& shape, const std::wstring& name = L"");
         Variable(const NDShape& shape, DataType type, const std::wstring& name = L"");
 
+        // Create an 'Input' Variable with an explicitly specified sequenceAxisId
+        // TODO: Do we need the ability to create Input variables with multiple sequenceAxes?
+        Variable(const NDShape& shape, AxisId axisId = AxisId::DefaultSequenceAxis, DataType type = DataType::Float, const std::wstring& name = L"");
+
         // Create an 'Output' variable aliasing the Output of the specified Function
         Variable(FunctionPtr function);
 
@@ -39,6 +58,8 @@ namespace CNTK
         NDShape Shape() const;
         VariableType Type() const;
         std::wstring Name() const;
+
+        std::unordered_set<AxisId> SequenceAxes() const;
 
         // Returns the value associated with a 'Constant' Variable
         // Throws an exception when called for a Variable that is not a 'Constant'
@@ -71,9 +92,10 @@ namespace std {
         size_t operator()(const CNTK::Variable& x) const;
     };
 
-    /*
-    bool operator==(const CNTK::Variable& left, const CNTK::Variable& right);
-    */
+    template <> struct hash<CNTK::AxisId>
+    {
+        size_t operator()(const CNTK::AxisId& x) const;
+    };
 }
 
 

@@ -118,30 +118,31 @@ FunctionPtr EncoderSubNet(Variable sourceInput, size_t cellDim, size_t hiddenDim
 }
 
 // Attention as described in http://arxiv.org/pdf/1412.7449v3.pdf
-FunctionPtr Attention(Variable encoderStates, Variable decoderState)
+FunctionPtr Attention(Variable encoderState, Variable decoderState)
 {
-    size_t encoderStateDim = encoderStates.Shape()[0];
-    size_t decoderStateDim = decoderState.Shape()[0];
-    size_t attentionDim = decoderStateDim;
-    auto encoderStateProjParams = CNTK::Parameter(CNTK::RandomUniform({ attentionDim, encoderStateDim }, -0.5, 0.5), L"AttentionEncoderParams");
-    auto encoderProj = CNTK::Times(encoderStateProjParams, encoderStates);
-    auto decoderStateProjParams = CNTK::Parameter(CNTK::RandomUniform({ attentionDim, decoderStateDim }, -0.5, 0.5), L"AttentionDecoderParams");
+    NDShape attentionDim = decoderState.Shape();
+    auto encoderStateProjParams = CNTK::Parameter(CNTK::RandomUniform(attentionDim.AppendShape(encoderState.Shape()), -0.5, 0.5), L"AttentionEncoderParams");
+    auto encoderProj = CNTK::Times(encoderStateProjParams, encoderState);
+    auto decoderStateProjParams = CNTK::Parameter(CNTK::RandomUniform(attentionDim.AppendShape(decoderState.Shape()), -0.5, 0.5), L"AttentionDecoderParams");
     auto decoderProj = CNTK::Times(decoderStateProjParams, decoderState);
 
-    auto reductionParams = CNTK::Parameter(CNTK::RandomUniform({ 1, attentionDim }, -0.5, 0.5), L"AttentionReductionParams");
+    auto reductionParams = CNTK::Parameter(CNTK::RandomUniform(NDShape({ 1 }).AppendShape(attentionDim), -0.5, 0.5), L"AttentionReductionParams");
+
     // The Plus operation below broadcasts along the column dimension of the projected encoder state
     auto u = CNTK::Times(reductionParams, CNTK::Tanh(CNTK::Plus(decoderProj, encoderProj)));
 
-    // Perform a Softmax along the column dimension of 'u' to obtain the weight vector for the attention
-    auto attentionWeights = CNTK::Softmax(u, 1 /*axis*/);
+    // Perform a Softmax along the sequence axis of encoderState to obtain the weight vector for the attention
+    AxisId encoderStateSequenceAxis = *encoderState.SequenceAxes().begin();
+    auto attentionWeights = CNTK::Softmax(u, encoderStateSequenceAxis);
 
-    return CNTK::Times(encoderStates, attentionWeights);
+    // Now we multiply the encoderState with the attention state and then sum along the sequence axis of encoderState
+    return CNTK::Sum(CNTK::ElementTimes(attentionWeights, encoderState), encoderStateSequenceAxis);
 }
 
 // Note that this is just for training where we use an input target sentence to drive the decoder instead of its own output from previous step
 FunctionPtr DecoderWithAttention(Variable targetInput, Variable encoderStates, size_t cellDim)
 {
-    // The decoder is a recurrent network that uses attention over the hidden states of the encoder emitted for each step of the source sequence
+    // The decoder is a recurrent network that uses attention over the hidden states of the encoder for each step of the source sequence
 
     // Compute the context vector using attention over the encoderStates
     auto ctPlaceholder = Variable({ cellDim }, L"ctPlaceHolder");
@@ -157,17 +158,7 @@ FunctionPtr DecoderWithAttention(Variable targetInput, Variable encoderStates, s
 FunctionPtr EncoderDecoderWithAttention(Variable sourceInput, Variable targetInput, size_t cellDim, size_t hiddenDim)
 {
     auto encoderFunction = EncoderSubNet(sourceInput, cellDim, hiddenDim);
-
-    // Each Variable has a Shape (denoting the shape of a sample) and one implicit sequence dimension(s) denoting the fixed or variable lengths of
-    // the sequence that the Variable denotes.
-    // We reshape the encoder state sequence to fold the sequence axis into the sample shape so that it turns from being a sequence of states to
-    // a single sample consisting of variable number of columns corresponding to the length of the source sequence. We then perform batch algebraic and reduction
-    // operations over the encoder state inside the decoder recurrence loop.
-    NDShape newShape = { 1, INFERRED_DIMENSION };
-    newShape.insert(newShape.end(), encoderFunction->Output().Shape().begin(), encoderFunction->Output().Shape().end());
-    auto encoderStates = CNTK::Reshape(encoderFunction, -1, (int)encoderFunction->Output().Shape().size(), newShape);
-
-    return DecoderWithAttention(targetInput, encoderStates, cellDim);
+    return DecoderWithAttention(targetInput, encoderFunction, cellDim);
 }
 
 void TrainEncoderDecoder(MinibatchSourcePtr trainingDataMinibatchSource)
