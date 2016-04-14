@@ -1,2 +1,8 @@
 1) How should we denote the sequence and batch axes?
 2) 
+
+
+
+
+
+

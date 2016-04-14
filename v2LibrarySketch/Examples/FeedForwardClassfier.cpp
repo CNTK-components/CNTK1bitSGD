@@ -25,12 +25,13 @@ inline CNTK::FunctionPtr ReLULayer(CNTK::Variable input, size_t outputDim)
 FunctionPtr FullyConnectedFeedForwardClassifierNet(CNTK::Variable input, size_t numOutputClasses, size_t hiddenLayerDim, size_t numHiddenLayers)
 {
     assert(numHiddenLayers >= 1);
-    FunctionPtr prevReLUFunction = ReLULayer(input, hiddenLayerDim);
+    FunctionPtr classifierRoot = ReLULayer(input, hiddenLayerDim);
     for (size_t i = 1; i < numHiddenLayers; ++i)
-        prevReLUFunction = ReLULayer(prevReLUFunction, hiddenLayerDim);
+        classifierRoot = ReLULayer(classifierRoot, hiddenLayerDim);
 
     Variable outputTimesParam = CNTK::Parameter(RandomUniform({ numOutputClasses, hiddenLayerDim }, -0.5, 0.5), L"OutputTimesParam");
-    return CNTK::Times(outputTimesParam, prevReLUFunction);
+    classifierRoot = CNTK::Times(outputTimesParam, classifierRoot);
+    return classifierRoot;
 }
 
 std::pair<Value, Value> GetNextMinibatch();
@@ -38,7 +39,7 @@ std::pair<Value, Value> GetNextMinibatch();
 void TrainFeedForwardClassifier()
 {
     const size_t inputDim = 937;
-    const size_t numOutputClasses = 9404;
+    const size_t numOutputClasses = 9304;
     const size_t numHiddenLayers = 6;
     const size_t hiddenLayersDim = 2048;
 

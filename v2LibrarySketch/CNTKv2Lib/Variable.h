@@ -15,9 +15,9 @@ namespace CNTK
     {
     public:
         AxisId(size_t rankId);
-        static AxisId DefaultSequenceAxis;
+        static AxisId DefaultDynamicAxis;
         static AxisId BatchAxisId;
-        static AxisId NewAxis(const std::wstring& name = L"");
+        static AxisId NewDynamicAxis(const std::wstring& name = L"");
 
         std::wstring Name();
     };
@@ -31,9 +31,7 @@ namespace CNTK
     };
 
     // Variable instances are symbolic entities representing the inputs and outputs of a Function
-    // Note that a Variable is symbolic and does not represent the actual values except when the 
-    // Variable is a Constant or a Parameter in which case there is an actual Value bound to the variable
-    // TODO: Should Parameter and Constant be separate types derived from Variable?
+    // Note that a Variable is symbolic and does not represent the actual values
     class Variable
     {
     public:
@@ -41,11 +39,12 @@ namespace CNTK
         Variable(const NDShape& shape, const std::wstring& name = L"");
         Variable(const NDShape& shape, DataType type, const std::wstring& name = L"");
 
-        // Create an 'Input' Variable with an explicitly specified sequenceAxisId
-        // TODO: Do we need the ability to create Input variables with multiple sequenceAxes?
-        Variable(const NDShape& shape, AxisId axisId = AxisId::DefaultSequenceAxis, DataType type = DataType::Float, const std::wstring& name = L"");
+        // Create an 'Input' Variable with an explicitly specified dynamicAxisId
+        // TODO: Do we need the ability to create Input variables with multiple dynamicAxes?
+        Variable(const NDShape& shape, AxisId axisId = AxisId::DefaultDynamicAxis, const std::wstring& name = L"");
 
         // Create an 'Output' variable aliasing the Output of the specified Function
+        // This throws a runtime exception if invoked for a Function instance with multiple outputs
         Variable(FunctionPtr function);
 
         // Create a 'Constant' or 'Parameter' variable
@@ -59,16 +58,7 @@ namespace CNTK
         VariableType Type() const;
         std::wstring Name() const;
 
-        std::unordered_set<AxisId> SequenceAxes() const;
-
-        // Returns the value associated with a 'Constant' Variable
-        // Throws an exception when called for a Variable that is not a 'Constant'
-        // The returned NDArrayView is read-only and its contents cannot be mutated
-        NDArrayView ConstantValue() const;
-
-        // Returns the value associated with a 'Parameter' Variable
-        // Throws an exception when called for a Variable that is not a 'Parameter'
-        NDArrayView ParameterValue() const;
+        std::unordered_set<AxisId> DynamicAxes() const;
 
         // Function whose output this variable is. Only applicable for 'Output' variables 
         // Returns null when called for a Variable that is not an 'Output'
@@ -97,5 +87,3 @@ namespace std {
         size_t operator()(const CNTK::AxisId& x) const;
     };
 }
-
-

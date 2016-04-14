@@ -8,8 +8,8 @@ namespace CNTK
 {
     struct DistributedWorkerDescriptor
     {
-        size_t m_globalRank;
-        std::wstring m_hostId;
+        size_t GlobalRank;
+        std::wstring HostId;
     };
 
     // An opaque type representing the communicator object to be used for communication among distributed workers
@@ -18,6 +18,7 @@ namespace CNTK
     {
     public:
         std::unordered_set<DistributedWorkerDescriptor> Workers() const;
+        DistributedWorkerDescriptor CurrentWorker();
 
         // Creates a new distributed communicator comprising of a subset of the workers in this communicator
         DistributedCommunicator SubGroup(const std::unordered_set<DistributedWorkerDescriptor>& subGroupWorkers) const;

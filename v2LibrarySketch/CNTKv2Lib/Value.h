@@ -4,7 +4,7 @@
 
 namespace CNTK
 {
-    // The Value type denotes a multi-dimensional array of values with an optional mask
+    // The Value type denotes a multi-dimensional array with an optional mask
     // This denotes the actual data fed into or produced from a computation
     class Value
     {
@@ -16,6 +16,7 @@ namespace CNTK
         Value(const NDArrayView& data); 
 
         // The mask allows specifying certain locations in data array to be marked as invalid for purposes of batching variable length sequences.
+        // Only contiguous ranges at the end the end of axes can be masked/invalid.
         // The mask array view is typically lower dimensionailty than the data, which means values are masked in units of (data.rank() - mask.rank()) 
         // dimensional values along the least significat dimensions of the data
         // Note: The data and mask must be on the same device

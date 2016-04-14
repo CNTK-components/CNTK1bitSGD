@@ -20,7 +20,7 @@ namespace CNTK
         Float16,
         Float,
         Double,
-        Complex,
+        // TODO: Complex, String ?
     };
 
     enum class StorageType

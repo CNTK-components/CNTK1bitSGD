@@ -8,12 +8,15 @@
 
 using namespace CNTK;
 
-FunctionPtr LSTMPComponentWithSelfStabilization(Variable input,
-                                                size_t outputDim,
-                                                size_t cellDim)
+std::pair<FunctionPtr, FunctionPtr> LSTMPCellWithSelfStabilization(Variable input,
+                                                                   Variable prevOutput,
+                                                                   Variable prevCellState)
 {
     assert(input.Shape().size() == 1);
     size_t inputDim = input.Shape()[0];
+
+    size_t outputDim = prevOutput.Shape()[0];
+    size_t cellDim = prevCellState.Shape()[0];
 
     auto Wxo = CNTK::Parameter(CNTK::RandomUniform({ cellDim, inputDim }, -0.5, 0.5), L"WxoParam");
     auto Wxi = CNTK::Parameter(CNTK::RandomUniform({ cellDim, inputDim }, -0.5, 0.5), L"WxiParam");
@@ -71,43 +74,48 @@ FunctionPtr LSTMPComponentWithSelfStabilization(Variable input,
 
     auto expsWmr = CNTK::Exp(sWmr);
 
-    auto outputPlaceholder = Variable({ outputDim }, L"outputPlaceHolder");
-    auto dh = CNTK::PastValue(0.0, outputPlaceholder, L"OutputPastValue");
-    auto ctPlaceholder = Variable({ cellDim }, L"ctPlaceHolder");
-    auto dc = CNTK::PastValue(0.0, ctPlaceholder, L"CellPastValue");
-
-    auto Wxix = CNTK::Times(Wxi, CNTK::Scale(expsWxi, input));
-    auto Whidh = CNTK::Times(Whi, CNTK::Scale(expsWhi, dh));
-    auto Wcidc = CNTK::ElementTimes(Wci, CNTK::Scale(expsWci, dc));
+    auto Wxix = CNTK::Times(Wxi, CNTK::ElementTimes(expsWxi, input));
+    auto Whidh = CNTK::Times(Whi, CNTK::ElementTimes(expsWhi, prevOutput));
+    auto Wcidc = CNTK::ElementTimes(Wci, CNTK::ElementTimes(expsWci, prevCellState));
 
     auto it = CNTK::Sigmoid(CNTK::Plus(CNTK::Plus(CNTK::Plus(Wxix, Bi), Whidh), Wcidc));
 
-    auto Wxcx = CNTK::Times(Wxc, CNTK::Scale(expsWxc, input));
-    auto Whcdh = CNTK::Times(Whc, CNTK::Scale(expsWhc, dh));
+    auto Wxcx = CNTK::Times(Wxc, CNTK::ElementTimes(expsWxc, input));
+    auto Whcdh = CNTK::Times(Whc, CNTK::ElementTimes(expsWhc, prevOutput));
     auto bit = CNTK::ElementTimes(it, CNTK::Tanh(CNTK::Plus(Wxcx, CNTK::Plus(Whcdh, Bc))));
 
-    auto Wxfx = CNTK::Times(Wxf, CNTK::Scale(expsWxf, input));
-    auto Whfdh = CNTK::Times(Whf, CNTK::Scale(expsWhf, dh));
-    auto Wcfdc = CNTK::ElementTimes(Wcf, CNTK::Scale(expsWcf, dc));
+    auto Wxfx = CNTK::Times(Wxf, CNTK::ElementTimes(expsWxf, input));
+    auto Whfdh = CNTK::Times(Whf, CNTK::ElementTimes(expsWhf, prevOutput));
+    auto Wcfdc = CNTK::ElementTimes(Wcf, CNTK::ElementTimes(expsWcf, prevCellState));
 
     auto ft = CNTK::Sigmoid(CNTK::Plus(CNTK::Plus(CNTK::Plus(Wxfx, Bf), Whfdh), Wcfdc));
 
-    auto bft = CNTK::ElementTimes(ft, dc);
+    auto bft = CNTK::ElementTimes(ft, prevCellState);
 
     auto ct = CNTK::Plus(bft, bit);
 
-    auto Wxox = CNTK::Times(Wxo, CNTK::Scale(expsWxo, input));
-    auto Whodh = CNTK::Times(Who, CNTK::Scale(expsWho, dh));
-    auto Wcoct = CNTK::ElementTimes(Wco, CNTK::Scale(expsWco, ctPlaceholder));
+    auto Wxox = CNTK::Times(Wxo, CNTK::ElementTimes(expsWxo, input));
+    auto Whodh = CNTK::Times(Who, CNTK::ElementTimes(expsWho, prevOutput));
+    auto Wcoct = CNTK::ElementTimes(Wco, CNTK::ElementTimes(expsWco, ct));
 
     auto ot = CNTK::Sigmoid(CNTK::Plus(CNTK::Plus(CNTK::Plus(Wxox, Bo), Whodh), Wcoct));
 
     auto mt = CNTK::ElementTimes(ot, CNTK::Tanh(ct));
 
-    auto LSTMComponentTemp = CNTK::Times(Wmr, CNTK::Scale(expsWmr, mt));
+    return { Times(Wmr, ElementTimes(expsWmr, mt)), ct };
+}
 
-    // Form the recurrence loop by connecting the 'output' and 'ct' back to the inputs of the respective PastValue nodes
-    return CNTK::Composite(LSTMComponentTemp, { { outputPlaceholder, LSTMComponentTemp->Output() }, { ctPlaceholder, ct } });
+FunctionPtr LSTMPComponentWithSelfStabilization(Variable input, size_t outputDim, size_t cellDim)
+{
+    auto outputPlaceholder = Variable({ outputDim }, L"outputPlaceHolder");
+    auto dh = PastValue(0.0, outputPlaceholder, L"OutputPastValue");
+    auto ctPlaceholder = Variable({ cellDim }, L"ctPlaceHolder");
+    auto dc = PastValue(0.0, ctPlaceholder, L"CellPastValue");
+
+    auto LSTMCell = LSTMPCellWithSelfStabilization(input, dh, dc);
+
+    // Form the recurrence loop by connecting the output and cellstate back to the inputs of the respective PastValue nodes
+    return Composite(LSTMCell.first, { { outputPlaceholder, LSTMCell.first }, { ctPlaceholder, LSTMCell.second } });
 }
 
 FunctionPtr LSTMNet(Variable features, size_t cellDim, size_t hiddenDim, size_t numOutputClasses, size_t numLSTMLayers)
@@ -123,7 +131,7 @@ FunctionPtr LSTMNet(Variable features, size_t cellDim, size_t hiddenDim, size_t 
     auto sW = CNTK::Parameter(CNTK::Constant({ 1, 1 }, 0.0), L"sWParam");
     auto expsW = CNTK::Exp(sW);
 
-    return CNTK::Plus(CNTK::Times(W, CNTK::Scale(expsW, nextInput)), b);
+    return CNTK::Plus(CNTK::Times(W, CNTK::ElementTimes(expsW, nextInput)), b);
 }
 
 void TrainLSTMClassifier(MinibatchSourcePtr trainingDataMinibatchSource)

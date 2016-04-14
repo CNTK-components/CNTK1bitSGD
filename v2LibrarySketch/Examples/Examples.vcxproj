@@ -145,7 +145,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="1BitSGDTraining.cpp" />
+    <ClCompile Include="1BitDataParallelSGDTraining.cpp" />
     <ClCompile Include="CustomNDCGTrainingCriterion.cpp" />
     <ClCompile Include="DisjointModelsCoTraining.cpp" />
     <ClCompile Include="ResNet34ImageClassifier.cpp" />

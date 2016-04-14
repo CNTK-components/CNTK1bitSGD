@@ -94,10 +94,6 @@ namespace CNTK
         virtual FunctionPtr Clone() const;
 
     public:
-        // First Output variable; i.e. Outputs()[0]
-        // TODO: Throw an exception when called for a function with multiple outputs?
-        Variable Output() const;
-
         // Conversion operator that returns the first Output variable of the function; i.e. Outputs()[0]
         // TODO: Throw an exception when called for a function with multiple outputs?
         operator Variable() const;
@@ -120,6 +116,18 @@ namespace CNTK
         // All Parameter variables
         std::unordered_set<Variable> Parameters() const;
 
+        // All Parameter values
+        std::unordered_map<Variable, Value> ParametersValues() const;
+
+        // Value of a specific Parameter
+        Value ParameterValue(Variable param) const;
+
+        // All Constant variables
+        std::unordered_set<Variable> Constants() const;
+
+        // All Constant values
+        std::unordered_map<Variable, Value> ConstantsValues() const;
+
         // TODO: Methods to reflect on the Function's underlying graph structure
         // Provide the ability to "Visit" the graph, which can be used to achieve model editing functionality 
 
@@ -132,7 +140,7 @@ namespace CNTK
         DISALLOW_MOVE_CTOR_AND_ASSIGNMENT(Function);
     };
 
-    // Methods to instantiate built-in CNTK functions
+    // Factory methods to instantiate built-in CNTK functions
     FunctionPtr Times(const Variable& leftOperand, const Variable& rightOperand, const std::wstring& name = L"");
     FunctionPtr Plus(const Variable& leftOperand, const Variable& rightOperand, const std::wstring& name = L"");
     FunctionPtr ReLU(const Variable& operand, const std::wstring& name = L"");
@@ -142,10 +150,14 @@ namespace CNTK
     FunctionPtr PredictionError(const Variable& prediction, const Variable& labels, const std::wstring& name = L"");
     FunctionPtr Exp(const Variable& operand, const std::wstring& name = L"");
     FunctionPtr PastValue(const Variable& initialState, const Variable& operand, const std::wstring& name = L"");
-    //FunctionPtr DiagTimes(const Variable& leftOperand, const Variable& rightOperand, const std::wstring& name = L"");
+    FunctionPtr PastValue(const Variable& initialState, const Variable& operand, AxisId axis, const std::wstring& name = L"");
     FunctionPtr ElementTimes(const Variable& leftOperand, const Variable& rightOperand, const std::wstring& name = L"");
     FunctionPtr Convolution(const Variable& convolutionMap, const Variable& operand, const NDShape& strides, bool zeroPadding = false, const std::wstring& name = L"");
     FunctionPtr BatchNormalization(const Variable& operand, const Variable& scale, const Variable& bias, const Variable& runningMean, const Variable& runningInvStd, bool spacial, size_t bnTimeConstant, double epsilon, const std::wstring& name = L"");
+
+    // Operator overloads
+    FunctionPtr operator+(const Variable& leftOperand, const Variable& rightOperand);
+    FunctionPtr operator*(const Variable& leftOperand, const Variable& rightOperand);
 
     enum class PoolingType
     {
@@ -157,7 +169,7 @@ namespace CNTK
     FunctionPtr Softmax(const Variable& operand);
 
     // Overload to perform SoftMax reduction along the specified axis
-    FunctionPtr Softmax(const Variable& operand, AxisId reductionAxis);
+    FunctionPtr Softmax(const Variable& operand, AxisId axis);
 
     FunctionPtr Reshape(const Variable& operand, size_t beginAxis, size_t endAxis, const NDShape& newShape);
 
@@ -182,6 +194,6 @@ namespace CNTK
 
     // Create a new combined function whose inputs and outputs are the union of the inputs of the specified set of rootFunctions
     // This can be used to combine multiple functions into a single function
-    // E.g. The function to train for a classification problem is a combination of the training loss function and an error prediciton function
+    // E.g. The model for a classification problem comprises of a training loss function to use as the training objective with and an error prediciton function
     FunctionPtr Combined(std::unordered_set<FunctionPtr> rootFunctions, const std::wstring& name = L"");
 }

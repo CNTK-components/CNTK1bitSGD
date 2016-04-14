@@ -16,7 +16,9 @@ namespace CNTK
     public:
         // Method to update the parameters associated with this learner. By returning false, this method indicates that
         // learning has stopped for all of the parameters associated with this learner
-        virtual bool Update(const std::unordered_map<Variable, Value>& gradientValues, size_t trainingSampleCount) = 0;
+        virtual bool Update(const std::unordered_map<Variable, Value>& parameterValues,
+                            const std::unordered_map<Variable, Value>& gradientValues,
+                            size_t trainingSampleCount) = 0;
 
     public:
 

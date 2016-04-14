@@ -64,7 +64,7 @@ NDArrayView ComputeConditionVectors(FunctionPtr conditionSummarizationNet, size_
 {
     std::vector<NDArrayView> conditionVectors(numConditionIds);
     for (size_t i = 0; i < numConditionIds; ++i) {
-        conditionSummarizationNet->Forward({ { conditionSummarizationNet->Arguments()[0], GetConditionFeatures(i) } }, { { conditionSummarizationNet->Output(), conditionVectors[i] } });
+        conditionSummarizationNet->Forward({ { conditionSummarizationNet->Arguments()[0], GetConditionFeatures(i) } }, { { conditionSummarizationNet, conditionVectors[i] } });
     }
 
     return ConcatenateArrayViews(conditionVectors);
@@ -75,7 +75,6 @@ class ConditionVectorsLearner : public Learner
 public:
     ConditionVectorsLearner(Variable conditionVectorsParam, FunctionPtr conditionSummarizer)
         : Learner({ conditionVectorsParam }),
-        m_conditionVectorsParam(conditionVectorsParam),
         m_conditionSummarizerNet(conditionSummarizer),
         m_accumulatedGradients(conditionVectorsParam.Shape(), DataType::Float), m_numSamplesGradientsAccumulatedFor(0)
     {
@@ -86,7 +85,9 @@ public:
         m_conditionSummarizerParamsLearner = CNTK::SGDLearner(conditionSummarizer->Parameters(), learningRatePerSample, momentumTimeConstant);
     }
 
-    bool Update(const std::unordered_map<Variable, Value>& gradientValues, size_t trainingSampleCount) override
+    bool Update(const std::unordered_map<Variable, Value>& parameterValues,
+                const std::unordered_map<Variable, Value>& gradientValues,
+                size_t trainingSampleCount) override
     {
         const size_t updateThreshold = 100000;
         if ((m_numSamplesGradientsAccumulatedFor + trainingSampleCount) > updateThreshold)
@@ -97,20 +98,20 @@ public:
             std::vector<NDArrayView> conditionVectors(numConditionIds);
             bool retVal = false;
             for (size_t i = 0; i < numConditionIds; ++i) {
-                BackPropState backpropState = m_conditionSummarizerNet->Forward({ { m_conditionSummarizerNet->Arguments()[0], GetConditionFeatures(i) } }, { { m_conditionSummarizerNet->Output(), conditionVectors[i] } }, DeviceDescriptor::DefaultDevice(), true);
+                BackPropState backpropState = m_conditionSummarizerNet->Forward({ { m_conditionSummarizerNet->Arguments()[0], GetConditionFeatures(i) } }, { { m_conditionSummarizerNet, conditionVectors[i] } }, DeviceDescriptor::DefaultDevice(), true);
                 NDArrayView currentConditionIdGradients = gradientValues.begin()->second.Data().Slice(1, i, i + 1);
                 std::unordered_map<Variable, Value> paramGradients;
                 for (auto param : m_conditionSummarizerNet->Parameters()) {
                     paramGradients[param] = Value();
                 }
-                m_conditionSummarizerNet->Backward(backpropState, { { m_conditionSummarizerNet->Output(), currentConditionIdGradients } }, paramGradients);
+                m_conditionSummarizerNet->Backward(backpropState, { { m_conditionSummarizerNet, currentConditionIdGradients } }, paramGradients);
 
                 // TODO: Pass the actual number of samples
-                retVal |= m_conditionSummarizerParamsLearner->Update(paramGradients, 1);
+                retVal |= m_conditionSummarizerParamsLearner->Update(m_conditionSummarizerNet->ParametersValues(), paramGradients, 1);
 
                 // Now update the actual conditionVectorsParam's value
                 auto newConditionVectors = ComputeConditionVectors(m_conditionSummarizerNet, numConditionIds);
-                m_conditionVectorsParam.ParameterValue().CopyFrom(newConditionVectors);
+                parameterValues.begin()->second.Data().CopyFrom(newConditionVectors);
             }
 
             // Zero accumulated gradients
@@ -132,7 +133,6 @@ private:
 
 private:
     FunctionPtr m_conditionSummarizerNet;
-    Variable m_conditionVectorsParam;
     LearnerPtr m_conditionSummarizerParamsLearner;
     NDArrayView m_accumulatedGradients;
     size_t m_numSamplesGradientsAccumulatedFor;
