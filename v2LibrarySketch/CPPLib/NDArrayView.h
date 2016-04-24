@@ -25,8 +25,8 @@ namespace CNTK
 
     enum class StorageType
     {
-        DENSE,
-        SPARSE_CSC,
+        Dense,
+        SParseCSC,
         // TODO: Others?
     };
 

@@ -19,9 +19,10 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{FB07C3AF-30C5-49DD-A8BE-9903AD8C3468}</ProjectGuid>
+    <ProjectGuid>{F74CC5BA-463F-4933-92AE-CB9C1F0586ED}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
-    <RootNamespace>Examples</RootNamespace>
+    <RootNamespace>CPPLib</RootNamespace>
+    <ProjectName>CPPLib</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -86,7 +87,6 @@
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>..\CNTKv2Lib</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -101,7 +101,6 @@
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>..\CNTKv2Lib</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -145,16 +144,19 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="1BitDataParallelSGDTraining.cpp" />
-    <ClCompile Include="CustomNDCGTrainingCriterion.cpp" />
-    <ClCompile Include="DisjointModelsCoTraining.cpp" />
-    <ClCompile Include="ResNet34ImageClassifier.cpp" />
-    <ClCompile Include="Seq2SeqWithAttention.cpp" />
-    <ClCompile Include="FeedForwardClassfier.cpp" />
-    <ClCompile Include="LSTMClassifier.cpp" />
+    <ClInclude Include="Common.h" />
+    <ClInclude Include="Function.h" />
+    <ClInclude Include="Distributed.h" />
+    <ClInclude Include="MinibatchSource.h" />
+    <ClInclude Include="TrainingControl.h" />
+    <ClInclude Include="Value.h" />
+    <ClInclude Include="Variable.h" />
+    <ClInclude Include="Learner.h" />
+    <ClInclude Include="NDArrayView.h" />
+    <ClInclude Include="Trainer.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Common.h" />
+    <Text Include="OpenQuestions.txt" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

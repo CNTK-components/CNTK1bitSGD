@@ -3,9 +3,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 2013
 VisualStudioVersion = 12.0.40629.0
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CNTKv2Lib", "CNTKv2Lib\CNTKv2Lib.vcxproj", "{F74CC5BA-463F-4933-92AE-CB9C1F0586ED}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CPPLib", "CPPLib\CPPLib.vcxproj", "{F74CC5BA-463F-4933-92AE-CB9C1F0586ED}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Examples", "Examples\Examples.vcxproj", "{FB07C3AF-30C5-49DD-A8BE-9903AD8C3468}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CPPExamples", "CPPExamples\CPPExamples.vcxproj", "{FB07C3AF-30C5-49DD-A8BE-9903AD8C3468}"
 	ProjectSection(ProjectDependencies) = postProject
 		{F74CC5BA-463F-4933-92AE-CB9C1F0586ED} = {F74CC5BA-463F-4933-92AE-CB9C1F0586ED}
 	EndProjectSection

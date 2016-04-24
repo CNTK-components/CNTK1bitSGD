@@ -128,15 +128,15 @@ FunctionPtr Attention(Variable encoderState, Variable decoderState)
 
     auto reductionParams = Parameter(RandomUniform(NDShape({ 1 }).AppendShape(attentionDim), -0.5, 0.5), L"AttentionReductionParams");
 
-    // The Plus operation below broadcasts along the column dimension of the projected encoder state
-    auto u = Times(reductionParams, Tanh(Plus(decoderProj, encoderProj)));
+    // The + operation below broadcasts along the column dimension of the projected encoder state
+    auto u = Times(reductionParams, Tanh(decoderProj + encoderProj));
 
     // Perform a Softmax along the sequence axis of encoderState to obtain the weight vector for the attention
     AxisId encoderStateDynamicAxis = *encoderState.DynamicAxes().begin();
     auto attentionWeights = Softmax(u, encoderStateDynamicAxis);
 
     // Now we multiply the encoderState with the attention state and then sum along the sequence axis of encoderState
-    return Sum(ElementTimes(attentionWeights, encoderState), encoderStateDynamicAxis);
+    return Sum(attentionWeights * encoderState, encoderStateDynamicAxis);
 }
 
 // Note that this is just for training where we use an input target sentence to drive the decoder instead of its own output from previous step

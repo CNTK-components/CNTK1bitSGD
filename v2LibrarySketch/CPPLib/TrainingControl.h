@@ -21,9 +21,6 @@ namespace CNTK
         virtual bool PreMinibatchCallback(const Trainer& trainer);
 
         // TODO: Do we need a callback for after each minibatch too?
-
-        DISALLOW_COPY_CTOR_AND_ASSIGNMENT(TrainingControl);
-        DISALLOW_MOVE_CTOR_AND_ASSIGNMENT(TrainingControl);
     };
 
     typedef std::shared_ptr<TrainingControl> TrainingControlPtr;

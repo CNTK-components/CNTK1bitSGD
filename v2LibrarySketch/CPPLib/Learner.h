@@ -36,9 +36,6 @@ namespace CNTK
 
     public:
         std::vector<Variable> Parameters() const;
-
-        DISALLOW_COPY_CTOR_AND_ASSIGNMENT(Learner);
-        DISALLOW_MOVE_CTOR_AND_ASSIGNMENT(Learner);
     };
 
     typedef std::shared_ptr<Learner> LearnerPtr;

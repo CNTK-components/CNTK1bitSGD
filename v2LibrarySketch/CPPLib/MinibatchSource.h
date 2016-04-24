@@ -31,9 +31,6 @@ namespace CNTK
         virtual void ResetPosition(size_t newPosition);
 
         // TODO: Methods to save and restore from checkpoints
-
-        DISALLOW_COPY_CTOR_AND_ASSIGNMENT(MinibatchSource);
-        DISALLOW_MOVE_CTOR_AND_ASSIGNMENT(MinibatchSource);
     };
 
     typedef std::shared_ptr<MinibatchSource> MinibatchSourcePtr;

@@ -69,9 +69,6 @@ namespace CNTK
         DistributedCommunicator Communicator() const;
 
         DistributedTrain() = delete;
-
-        DISALLOW_COPY_CTOR_AND_ASSIGNMENT(DistributedTrain);
-        DISALLOW_MOVE_CTOR_AND_ASSIGNMENT(DistributedTrain);
     };
 
     typedef std::shared_ptr<DistributedTrain> DistributedTrainPtr;

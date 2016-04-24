@@ -135,9 +135,6 @@ namespace CNTK
         // Protected ctor for derived 'Function' ctors to specify the actual input parameters and shapes of outputs for a function instance.
         // All 'inputs; specified must be Variables of type Constant, Parameter or Input
         Function(const std::vector<Variable>& inputs, const std::vector<NDShape>& outputShapes, const std::wstring& name = L"");
-
-        DISALLOW_COPY_CTOR_AND_ASSIGNMENT(Function);
-        DISALLOW_MOVE_CTOR_AND_ASSIGNMENT(Function);
     };
 
     // Factory methods to instantiate built-in CNTK functions
@@ -155,6 +152,12 @@ namespace CNTK
     FunctionPtr Convolution(const Variable& convolutionMap, const Variable& operand, const NDShape& strides, bool zeroPadding = false, const std::wstring& name = L"");
     FunctionPtr BatchNormalization(const Variable& operand, const Variable& scale, const Variable& bias, const Variable& runningMean, const Variable& runningInvStd, bool spacial, size_t bnTimeConstant, double epsilon, const std::wstring& name = L"");
 
+    FunctionPtr IsLess(const Variable& leftOperand, const Variable& rightOperand, const std::wstring& name = L"");
+    FunctionPtr IsGreater(const Variable& leftOperand, const Variable& rightOperand, const std::wstring& name = L"");
+    FunctionPtr IsEqual(const Variable& leftOperand, const Variable& rightOperand, const std::wstring& name = L"");
+    FunctionPtr LogicalNot(const Variable& operand, const std::wstring& name = L"");
+    FunctionPtr Conditional(const Variable& predicate, const Variable& trueConditionOperand, const Variable& falseConditionOperand, const std::wstring& name = L"");
+
     // Operator overloads
     FunctionPtr operator+(const Variable& leftOperand, const Variable& rightOperand);
     FunctionPtr operator*(const Variable& leftOperand, const Variable& rightOperand);
@@ -164,6 +167,7 @@ namespace CNTK
         Max,
         Average,
     };
+
     FunctionPtr Pooling(const Variable& operand, PoolingType poolingType, const NDShape& poolingWindowShape, const NDShape& strides, const std::vector<bool>& autoPadding = {} /* defaults to no padding */, const std::wstring& name = L"");
 
     FunctionPtr Softmax(const Variable& operand);
