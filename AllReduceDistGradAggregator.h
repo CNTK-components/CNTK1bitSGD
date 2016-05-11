@@ -278,11 +278,9 @@ public:
 
         if (headerCPU->numSamples == 0)
         {
-            assert(headerCPU->criterion == 0);
+            headerCPU->criterion = 0.0;
             for (int i = 0; i < headerCPU->numEvalNode; ++i)
-            {
-                assert(headerCPU->evalErrors[i] == 0);
-            }
+                headerCPU->evalErrors[i] = { 0.0, 0 };
 
             // If the current node did not process any samples, the gradients should be zero'd
             for (size_t i = 0; i < numGradMatrices; ++i)
@@ -347,7 +345,7 @@ public:
                     recvGradStripesQuantizedRequests.push_back(MPI_Request());
                     int recvRequestIdx = recvGradStripesQuantizedRequests.size() - 1;
 
-                    MPI_Irecv(m_recvGradStripesQuantized[i][j]->GetArray(), m_recvGradStripesQuantized[i][j]->GetSize(), MPI_CHAR, source, i, m_mpi->Communicator(), &(recvGradStripesQuantizedRequests[recvRequestIdx])) || MpiFail("MPI_Irecv");
+                    MPI_Irecv(m_recvGradStripesQuantized[i][j]->Buffer(), m_recvGradStripesQuantized[i][j]->GetSize(), MPI_CHAR, source, i, m_mpi->Communicator(), &(recvGradStripesQuantizedRequests[recvRequestIdx])) || MpiFail("MPI_Irecv");
                 }
             }
         }
@@ -392,7 +390,7 @@ public:
                             quantizedStripe.Print(printHeaderBuf, 0, numRowsToPrint - 1, 0, numColsToPrint - 1);
                         }
 
-                        MPI_Isend(quantizedStripe.GetArray(), quantizedStripe.GetSize(), MPI_CHAR, j, i, m_mpi->Communicator(), &(sendGradStripesQuantizedRequests[i][sendRequestIdx])) || MpiFail("MPI_Isend");
+                        MPI_Isend(quantizedStripe.Buffer(), quantizedStripe.GetSize(), MPI_CHAR, j, i, m_mpi->Communicator(), &(sendGradStripesQuantizedRequests[i][sendRequestIdx])) || MpiFail("MPI_Isend");
                         sendRequestIdx++;
                     }
                     else
@@ -509,7 +507,7 @@ public:
                     {
                         recvAggGradStripesQuantizedRequests[i].push_back(MPI_Request());
                         QuantizedMatrix<ElemType> quantizedStripe = m_gradQuantized[i]->ColumnSlice(stripe.m_startCol, stripe.m_numCols);
-                        MPI_Irecv(quantizedStripe.GetArray(), quantizedStripe.GetSize(), MPI_CHAR, j, numGradMatrices + 1 + i, m_mpi->Communicator(), &(recvAggGradStripesQuantizedRequests[i][recvRequestIdx])) || MpiFail("MPI_Irecv");
+                        MPI_Irecv(quantizedStripe.Buffer(), quantizedStripe.GetSize(), MPI_CHAR, j, numGradMatrices + 1 + i, m_mpi->Communicator(), &(recvAggGradStripesQuantizedRequests[i][recvRequestIdx])) || MpiFail("MPI_Irecv");
                         recvRequestIdx++;
                     }
                 }
@@ -536,7 +534,7 @@ public:
                 {
                     int dest = (j >= MyRank()) ? (j + 1) : j;
                     // TODO: Should we use MPI_Bcast instead for better performance
-                    MPI_Isend(aggGradStripesQuantized[i]->GetArray(), aggGradStripesQuantized[i]->GetSize(), MPI_CHAR, dest, numGradMatrices + 1 + i, m_mpi->Communicator(), &(sendAggGradStripeQuantizedRequests[i][j])) || MpiFail("MPI_Irecv");
+                    MPI_Isend(aggGradStripesQuantized[i]->Buffer(), aggGradStripesQuantized[i]->GetSize(), MPI_CHAR, dest, numGradMatrices + 1 + i, m_mpi->Communicator(), &(sendAggGradStripeQuantizedRequests[i][j])) || MpiFail("MPI_Irecv");
                 }
             }
         }
