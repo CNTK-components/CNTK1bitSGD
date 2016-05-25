@@ -265,6 +265,7 @@ public:
 
     void AggregateGradientsImpl(const std::vector<Matrix<ElemType>*>& gradients, DistGradHeader* headerCPU, bool showSyncPerfStats)
     {
+        // Profile whole function
         PROFILE_SCOPE(profilerEvtGradientAggregation);
         Timer aggregationTimer;
         int deviceId = gradients[0]->GetDeviceId();
