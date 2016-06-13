@@ -95,7 +95,7 @@ namespace Microsoft { namespace MSR { namespace CNTK {
                 );
         }
         /*virtual*/ void OnEpochEnd(const std::list<ComputationNodeBasePtr>& LearnableNodes, 
-            std::list<Matrix<ElemType>>&                smoothedGradient,
+            const std::list<shared_ptr<Matrix<ElemType>>>&                smoothedGradient,
             size_t                                      samplesSinceLastSync) override
         {
             Base::OnEpochEnd(LearnableNodes, smoothedGradient, samplesSinceLastSync);
@@ -103,7 +103,7 @@ namespace Microsoft { namespace MSR { namespace CNTK {
         /*virtual*/ void ModelAggregationProcessing(
             size_t samplesSinceLastSync,
             const std::list<ComputationNodeBasePtr>& learnableNodes,
-            std::list<Matrix<ElemType>>& smoothedGradient,
+            const std::list<shared_ptr<Matrix<ElemType>>>& smoothedGradient,
             size_t& totalSamplesProcessed,
             float& secondsOnCommunication
             ) override
@@ -182,9 +182,9 @@ namespace Microsoft { namespace MSR { namespace CNTK {
             //----------------------------------------
             if (m_resetSGDMomentumAfterAggregation)
             {
-                for (Matrix<ElemType>& x : smoothedGradient)
+                for (shared_ptr<Matrix<ElemType>> const & x : smoothedGradient)
                 {
-                    x.SetValue((ElemType)0);
+                    x->SetValue((ElemType)0);
                 }
             }
         }
