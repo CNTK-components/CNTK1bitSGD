@@ -266,7 +266,7 @@ public:
     void AggregateGradientsImpl(const std::vector<Matrix<ElemType>*>& gradients, DistGradHeader* headerCPU, bool showSyncPerfStats)
     {
         PROFILE_SCOPE(profilerEvtGradient1);
-        auto profilerState = ProfilerTimeBegin(profilerEvtGradientAsyncComm11);
+        auto profilerState = ProfilerTimeBegin();
 
         Timer aggregationTimer;
         int deviceId = gradients[0]->GetDeviceId();
@@ -419,8 +419,8 @@ public:
             MPI_Isend(headerCPU, headerCPU->Size(), MPI_CHAR, m_mpi->MainNodeRank(), numGradMatrices, m_mpi->Communicator(), &sendHeaderRequest) || MpiFail("MPI_Isend");
         }
 
-        ProfilerTimeEnd(profilerState);
-        profilerState = ProfilerTimeBegin(profilerEvtGradientWaitGradients1);
+        ProfilerTimeEnd(profilerState, profilerEvtGradientAsyncComm11);
+        profilerState = ProfilerTimeBegin();
 
         // Wait for the stripes to arrive from each node and unquantize and aggregate
         size_t numReceivesExpected = recvGradStripesQuantizedRequests.size();
@@ -479,8 +479,8 @@ public:
 
         assert(numActualReceives == numReceivesExpected);
 
-        ProfilerTimeEnd(profilerState);
-        profilerState = ProfilerTimeBegin(profilerEvtGradientWaitHeaders1);
+        ProfilerTimeEnd(profilerState, profilerEvtGradientWaitGradients1);
+        profilerState = ProfilerTimeBegin();
 
         // On the main node wait for the headers to arrive and aggregate
         if (m_mpi->IsMainNode())
@@ -503,8 +503,8 @@ public:
             assert(numNodesHeadersReceivedFrom == (NumProc() - 1));
         }
 
-        ProfilerTimeEnd(profilerState);
-        profilerState = ProfilerTimeBegin(profilerEvtGradientAsyncComm21);
+        ProfilerTimeEnd(profilerState, profilerEvtGradientWaitHeaders1);
+        profilerState = ProfilerTimeBegin();
 
         std::vector<std::vector<MPI_Request>> recvAggGradStripesQuantizedRequests(numGradMatrices);
         // Initiate receive of stripes of quantized aggregated gradients from different nodes
@@ -565,8 +565,8 @@ public:
             }
         }
 
-        ProfilerTimeEnd(profilerState);
-        profilerState = ProfilerTimeBegin(profilerEvtGradientWaitAggGradients1);
+        ProfilerTimeEnd(profilerState, profilerEvtGradientAsyncComm21);
+        profilerState = ProfilerTimeBegin();
 
         // Wait to receive all aggregated stripes and unquantize
         for (size_t i = 0; i < numGradMatrices; ++i)
@@ -576,8 +576,8 @@ public:
             m_preAggGradQuantizers[i]->UnquantizeAsync(*(m_gradQuantized[i]), *(gradients[i]), false);
         }
 
-        ProfilerTimeEnd(profilerState);
-        profilerState = ProfilerTimeBegin(profilerEvtGradientWaitAggHeaders1);
+        ProfilerTimeEnd(profilerState, profilerEvtGradientWaitAggGradients1);
+        profilerState = ProfilerTimeBegin();
 
         // Wait to receive aggregate header
         if (!m_mpi->IsMainNode())
@@ -585,8 +585,8 @@ public:
             MPI_Wait(&recvAggHeaderRequest, MPI_STATUSES_IGNORE) || MpiFail("MPI_Wait");
         }
 
-        ProfilerTimeEnd(profilerState);
-        profilerState = ProfilerTimeBegin(profilerEvtGradientWaitCompletion1);
+        ProfilerTimeEnd(profilerState, profilerEvtGradientWaitAggHeaders1);
+        profilerState = ProfilerTimeBegin();
 
         // Wait for all the unquantizations to finish
         for (size_t i = 0; i < numGradMatrices; ++i)
@@ -635,7 +635,7 @@ public:
             fprintf(stderr, "Actual gradient aggregation time: %.6g\n", epochTime);
         }
 
-        ProfilerTimeEnd(profilerState);
+        ProfilerTimeEnd(profilerState, profilerEvtGradientWaitCompletion1);
     }
 
     // Debug helper to print matrix contents
