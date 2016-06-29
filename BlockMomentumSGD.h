@@ -30,20 +30,23 @@ namespace Microsoft { namespace MSR { namespace CNTK {
         bool m_resetSGDMomentumAfterAggregation; 
         bool m_useNesterovMomentum;
         double m_blockLearningRate; 
-        double m_blockMomentumAsTimeConstant; 
-        size_t m_syncPeriod; 
+        const double m_blockMomentumAsTimeConstant; 
+        const size_t m_syncPeriod; 
         map < wstring, shared_ptr<Matrix<ElemType>>>     m_prevParameters;       // parameters at the last model aggregation point
         map < wstring, shared_ptr<Matrix<ElemType>>>    m_blockLevelSmoothedGradient; 
 
     public:
+
+        DISABLE_COPY_AND_MOVE(BlockMomentumSGD);
+
         BlockMomentumSGD(const MPIWrapperPtr& pMPI, size_t reportFreq, DEVICEID_TYPE devID, 
                         bool useNestrovMomentum, bool resetSGDM, 
                         double blockLearningRate, 
                         double blockMomentumAsTimeConstant, size_t syncPeriod)
-            :IMASGD<ElemType>(pMPI, reportFreq, devID)
+            :IMASGD<ElemType>(pMPI, reportFreq, devID),
+            m_blockMomentumAsTimeConstant(blockMomentumAsTimeConstant),
+            m_syncPeriod(syncPeriod)
         {
-            m_syncPeriod = syncPeriod;
-            m_blockMomentumAsTimeConstant = blockMomentumAsTimeConstant; 
             m_useNesterovMomentum = useNestrovMomentum;
             m_resetSGDMomentumAfterAggregation = resetSGDM; 
             m_blockLearningRate = blockLearningRate;
@@ -94,16 +97,10 @@ namespace Microsoft { namespace MSR { namespace CNTK {
                 m_resetSGDMomentumAfterAggregation ? ", resetting SGD momentum after sync" : ""
                 );
         }
-        /*virtual*/ void OnEpochEnd(const std::list<ComputationNodeBasePtr>& LearnableNodes, 
-            const std::list<shared_ptr<Matrix<ElemType>>>&                smoothedGradient,
-            size_t                                      samplesSinceLastSync) override
-        {
-            Base::OnEpochEnd(LearnableNodes, smoothedGradient, samplesSinceLastSync);
-        }
+
         /*virtual*/ void ModelAggregationProcessing(
             size_t samplesSinceLastSync,
             const std::list<ComputationNodeBasePtr>& learnableNodes,
-            const std::list<shared_ptr<Matrix<ElemType>>>& smoothedGradient,
             size_t& totalSamplesProcessed,
             float& secondsOnCommunication
             ) override
@@ -177,16 +174,6 @@ namespace Microsoft { namespace MSR { namespace CNTK {
                     prevWeight.SetValue(currentWeight);
                 }
             }
-            //----------------------------------------
-            // 3. reset SGD momentum if necessary 
-            //----------------------------------------
-            if (m_resetSGDMomentumAfterAggregation)
-            {
-                for (shared_ptr<Matrix<ElemType>> const & x : smoothedGradient)
-                {
-                    x->SetValue((ElemType)0);
-                }
-            }
         }
 
         /*virtual*/ void SaveToCheckPoint(File& fstream) override
@@ -194,17 +181,6 @@ namespace Microsoft { namespace MSR { namespace CNTK {
             if (m_pMPI->IsMainNode())
             {
                 fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BMACKP");
-                fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BOptions");
-                fstream << m_resetSGDMomentumAfterAggregation;
-                fstream.PutMarker(FileMarker::fileMarkerEndSection, L"EOptions");
-
-                fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BMomentumAsTimeConstant");
-                fstream << m_blockMomentumAsTimeConstant; 
-                fstream.PutMarker(FileMarker::fileMarkerEndSection, L"EMomentumAsTimeConstant");
-
-                fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BSyncPeriodInSamples"); 
-                fstream << m_syncPeriod; 
-                fstream.PutMarker(FileMarker::fileMarkerEndSection, L"ESyncPeriodInSamples");
 
                 fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BParam");
                 SaveParameters(fstream, m_prevParameters);
@@ -218,18 +194,6 @@ namespace Microsoft { namespace MSR { namespace CNTK {
         {
             if (fstream.TryGetMarker(FileMarker::fileMarkerBeginSection, L"BMACKP"))
             {
-                fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BOptions");
-                fstream >> m_resetSGDMomentumAfterAggregation;
-                fstream.GetMarker(FileMarker::fileMarkerEndSection, L"EOptions");
-
-                fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BMomentumAsTimeConstant");
-                fstream >> m_blockMomentumAsTimeConstant;
-                fstream.GetMarker(FileMarker::fileMarkerEndSection, L"EMomentumAsTimeConstant");
-
-                fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BSyncPeriodInSamples");
-                fstream >> m_syncPeriod;
-                fstream.GetMarker(FileMarker::fileMarkerEndSection, L"ESyncPeriodInSamples");
-
                 fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BParam");
                 LoadParameters(fstream, m_prevParameters, m_deviceId);
                 LoadParameters(fstream, m_blockLevelSmoothedGradient, m_deviceId);
