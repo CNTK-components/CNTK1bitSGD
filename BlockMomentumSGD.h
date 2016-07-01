@@ -14,8 +14,8 @@ namespace Microsoft { namespace MSR { namespace CNTK {
 
     // Implementation of Blockwise Model Update and Filtering (BMUF, a.k.a. block momentum) 
     // For detail, see the following paper
-    // Kai Chen and Qiang Huo, “Scalable training of deep learning machines by incremental block training 
-    // with intra-block parallel optimization and blockwise model-update filtering”, 
+    // Kai Chen and Qiang Huo, "Scalable training of deep learning machines by incremental block training 
+    // with intra-block parallel optimization and blockwise model-update filtering", 
     // in International Conference on Acoustics, Speech and Signal Processing , March 2016, Shanghai, China. 
 
     template<typename ElemType>
@@ -30,23 +30,21 @@ namespace Microsoft { namespace MSR { namespace CNTK {
         bool m_resetSGDMomentumAfterAggregation; 
         bool m_useNesterovMomentum;
         double m_blockLearningRate; 
-        const double m_blockMomentumAsTimeConstant; 
-        const size_t m_syncPeriod; 
+        double m_blockMomentumAsTimeConstantPerWorker; 
+        size_t m_syncPeriodPerWorker; 
         map < wstring, shared_ptr<Matrix<ElemType>>>     m_prevParameters;       // parameters at the last model aggregation point
         map < wstring, shared_ptr<Matrix<ElemType>>>    m_blockLevelSmoothedGradient; 
 
     public:
 
-        DISABLE_COPY_AND_MOVE(BlockMomentumSGD);
-
         BlockMomentumSGD(const MPIWrapperPtr& pMPI, size_t reportFreq, DEVICEID_TYPE devID, 
                         bool useNestrovMomentum, bool resetSGDM, 
                         double blockLearningRate, 
                         double blockMomentumAsTimeConstant, size_t syncPeriod)
-            :IMASGD<ElemType>(pMPI, reportFreq, devID),
-            m_blockMomentumAsTimeConstant(blockMomentumAsTimeConstant),
-            m_syncPeriod(syncPeriod)
+            :IMASGD<ElemType>(pMPI, reportFreq, devID)
         {
+            m_syncPeriodPerWorker = syncPeriod / pMPI->NumNodesInUse();
+            m_blockMomentumAsTimeConstantPerWorker = blockMomentumAsTimeConstant / pMPI->NumNodesInUse(); 
             m_useNesterovMomentum = useNestrovMomentum;
             m_resetSGDMomentumAfterAggregation = resetSGDM; 
             m_blockLearningRate = blockLearningRate;
@@ -82,19 +80,19 @@ namespace Microsoft { namespace MSR { namespace CNTK {
             }
             fprintf(stderr, "Parallel training (%d workers) using BlockMomentumSGD with "
                             "block momentum = %6.4f ,"
-                            "block momentum time constant = %6.4f ,"
+                            "block momentum time constant (per worker) = %6.4f, "
                             "block learning rate = %6.4f ,"
-                            "sync period = %d samples ,"
+                            "block size per worker = %d samples, "
                             "%s"
                             "%s"
                             "\n",
-                (int)m_pMPI->NumNodesInUse(),      
-                BlockMomentumSGD<double>::TimeConstant2Momentum(m_blockMomentumAsTimeConstant, m_syncPeriod), 
-                m_blockMomentumAsTimeConstant,
-                m_blockLearningRate, 
-                (int)m_syncPeriod, 
-                m_useNesterovMomentum ? ", using Nesterov style block momentum" : "" , 
-                m_resetSGDMomentumAfterAggregation ? ", resetting SGD momentum after sync" : ""
+                            (int)m_pMPI->NumNodesInUse(),      
+                            BlockMomentumSGD<double>::TimeConstant2Momentum(m_blockMomentumAsTimeConstantPerWorker, m_syncPeriodPerWorker), 
+                            m_blockMomentumAsTimeConstantPerWorker,
+                            m_blockLearningRate, 
+                            (int)m_syncPeriodPerWorker, 
+                            m_useNesterovMomentum ? "using Nesterov-style block momentum, " : "" , 
+                            m_resetSGDMomentumAfterAggregation ? "resetting SGD momentum after sync." : "."
                 );
         }
 
@@ -109,7 +107,7 @@ namespace Microsoft { namespace MSR { namespace CNTK {
             // 1. communicate with other nodes to negotiate contribution weights
             //----------------------------------------
             int   nTotalSamples = samplesSinceLastSync;
-            ElemType blockMomentum = (ElemType)BlockMomentumSGD<double>::TimeConstant2Momentum(m_blockMomentumAsTimeConstant, m_syncPeriod);
+            ElemType blockMomentum = (ElemType)BlockMomentumSGD<double>::TimeConstant2Momentum(m_blockMomentumAsTimeConstantPerWorker, m_syncPeriodPerWorker);
             Timer commTimer;
             secondsOnCommunication = 0.0f;
             commTimer.Start();
@@ -181,6 +179,17 @@ namespace Microsoft { namespace MSR { namespace CNTK {
             if (m_pMPI->IsMainNode())
             {
                 fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BMACKP");
+                fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BOptions");
+                fstream << m_resetSGDMomentumAfterAggregation;
+                fstream.PutMarker(FileMarker::fileMarkerEndSection, L"EOptions");
+
+                fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BMomentumAsTimeConstant");
+                fstream << m_blockMomentumAsTimeConstantPerWorker; 
+                fstream.PutMarker(FileMarker::fileMarkerEndSection, L"EMomentumAsTimeConstant");
+
+                fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BSyncPeriodInSamples"); 
+                fstream << m_syncPeriodPerWorker; 
+                fstream.PutMarker(FileMarker::fileMarkerEndSection, L"ESyncPeriodInSamples");
 
                 fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BParam");
                 SaveParameters(fstream, m_prevParameters);
@@ -194,6 +203,18 @@ namespace Microsoft { namespace MSR { namespace CNTK {
         {
             if (fstream.TryGetMarker(FileMarker::fileMarkerBeginSection, L"BMACKP"))
             {
+                fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BOptions");
+                fstream >> m_resetSGDMomentumAfterAggregation;
+                fstream.GetMarker(FileMarker::fileMarkerEndSection, L"EOptions");
+
+                fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BMomentumAsTimeConstant");
+                fstream >> m_blockMomentumAsTimeConstantPerWorker;
+                fstream.GetMarker(FileMarker::fileMarkerEndSection, L"EMomentumAsTimeConstant");
+
+                fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BSyncPeriodInSamples");
+                fstream >> m_syncPeriodPerWorker;
+                fstream.GetMarker(FileMarker::fileMarkerEndSection, L"ESyncPeriodInSamples");
+
                 fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BParam");
                 LoadParameters(fstream, m_prevParameters, m_deviceId);
                 LoadParameters(fstream, m_blockLevelSmoothedGradient, m_deviceId);
@@ -253,9 +274,9 @@ namespace Microsoft { namespace MSR { namespace CNTK {
        }
        static double Momentum2TimeConstant(double bm, size_t syncPeroid)
        {
-           if (bm >= 1.0 || bm <= 0.0)
+           if (bm >= 1.0 || bm < 0.0)
            {
-               InvalidArgument("Unexpected block momentum (%.2f). Block momentum should be in the range of (0,1)\n", bm);
+               InvalidArgument("Unexpected block momentum (%.2f). Block momentum should be in the range of [0,1)\n", bm);
            }
            return -(double)syncPeroid / log(bm); 
        }
