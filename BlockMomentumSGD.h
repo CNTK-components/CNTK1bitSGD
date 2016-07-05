@@ -32,8 +32,8 @@ namespace Microsoft { namespace MSR { namespace CNTK {
         double m_blockLearningRate; 
         double m_blockMomentumAsTimeConstantPerWorker; 
         size_t m_syncPeriodPerWorker; 
-        map < wstring, shared_ptr<Matrix<ElemType>>>     m_prevParameters;       // parameters at the last model aggregation point
-        map < wstring, shared_ptr<Matrix<ElemType>>>    m_blockLevelSmoothedGradient; 
+        map <wstring, shared_ptr<Matrix<ElemType>>> m_prevParameters; // parameters at the last model aggregation point
+        map <wstring, shared_ptr<Matrix<ElemType>>> m_blockLevelSmoothedGradient; 
 
     public:
 
