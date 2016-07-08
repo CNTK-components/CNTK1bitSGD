@@ -8,8 +8,6 @@
 
 #include "../SGDLib/MASGD.h"
 
-
-
 namespace Microsoft { namespace MSR { namespace CNTK {
 
     // Implementation of Blockwise Model Update and Filtering (BMUF, a.k.a. block momentum) 
@@ -27,11 +25,11 @@ namespace Microsoft { namespace MSR { namespace CNTK {
         using Base::DownCast;
     
      protected:
-        bool m_resetSGDMomentumAfterAggregation; 
-        bool m_useNesterovMomentum;
-        double m_blockLearningRate; 
-        double m_blockMomentumAsTimeConstantPerWorker; 
-        size_t m_syncPeriodPerWorker; 
+        const bool m_resetSGDMomentumAfterAggregation; 
+        const bool m_useNesterovMomentum;
+        const double m_blockLearningRate; 
+        const double m_blockMomentumAsTimeConstantPerWorker; 
+        const size_t m_syncPeriodPerWorker; 
         map <wstring, shared_ptr<Matrix<ElemType>>> m_prevParameters; // parameters at the last model aggregation point
         map <wstring, shared_ptr<Matrix<ElemType>>> m_blockLevelSmoothedGradient; 
 
@@ -41,19 +39,19 @@ namespace Microsoft { namespace MSR { namespace CNTK {
                         bool useNestrovMomentum, bool resetSGDM, 
                         double blockLearningRate, 
                         double blockMomentumAsTimeConstant, size_t syncPeriod)
-            :IMASGD<ElemType>(pMPI, reportFreq, devID)
+            :IMASGD<ElemType>(pMPI, reportFreq, devID),
+            m_resetSGDMomentumAfterAggregation(resetSGDM),
+            m_useNesterovMomentum(useNestrovMomentum),
+            m_blockLearningRate(blockLearningRate),
+            m_blockMomentumAsTimeConstantPerWorker(blockMomentumAsTimeConstant / pMPI->NumNodesInUse()),
+            m_syncPeriodPerWorker(syncPeriod / pMPI->NumNodesInUse())
         {
-            m_syncPeriodPerWorker = syncPeriod / pMPI->NumNodesInUse();
-            m_blockMomentumAsTimeConstantPerWorker = blockMomentumAsTimeConstant / pMPI->NumNodesInUse(); 
-            m_useNesterovMomentum = useNestrovMomentum;
-            m_resetSGDMomentumAfterAggregation = resetSGDM; 
-            m_blockLearningRate = blockLearningRate;
         }
 
-        /*virtual*/ void OnEpochStart(const std::list<ComputationNodeBasePtr>& LearnableNodes) override
+        /*virtual*/ void OnEpochStart(const std::list<ComputationNodeBasePtr>& learnableNodes) override
         {
-            Base::OnEpochStart(LearnableNodes); 
-            for (auto& pNode : LearnableNodes)
+            Base::OnEpochStart(learnableNodes); 
+            for (auto& pNode : learnableNodes)
             {
                 auto pnode = DownCast(pNode);
                 wstring name = pNode->NodeName();
@@ -176,20 +174,17 @@ namespace Microsoft { namespace MSR { namespace CNTK {
 
         /*virtual*/ void SaveToCheckPoint(File& fstream) override
         {
+            // TODO (v2): update this function to return a Dictionary.
             if (m_pMPI->IsMainNode())
             {
                 fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BMACKP");
                 fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BOptions");
                 fstream << m_resetSGDMomentumAfterAggregation;
-                fstream.PutMarker(FileMarker::fileMarkerEndSection, L"EOptions");
-
-                fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BMomentumAsTimeConstant");
+                fstream << m_useNesterovMomentum;
+                fstream << m_blockLearningRate;
                 fstream << m_blockMomentumAsTimeConstantPerWorker; 
-                fstream.PutMarker(FileMarker::fileMarkerEndSection, L"EMomentumAsTimeConstant");
-
-                fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BSyncPeriodInSamples"); 
                 fstream << m_syncPeriodPerWorker; 
-                fstream.PutMarker(FileMarker::fileMarkerEndSection, L"ESyncPeriodInSamples");
+                fstream.PutMarker(FileMarker::fileMarkerEndSection, L"EOptions");
 
                 fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BParam");
                 SaveParameters(fstream, m_prevParameters);
@@ -199,21 +194,36 @@ namespace Microsoft { namespace MSR { namespace CNTK {
                 fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"EMACKP");
             }
         }
-        /*virtual*/ void LoadFromCheckPoint(File& fstream) override
+        /*virtual*/ void LoadFromCheckPoint(File& fstream, size_t ckpVersion) override
         {
+            // TODO (v2): update this function to take a Dictionary as input.
             if (fstream.TryGetMarker(FileMarker::fileMarkerBeginSection, L"BMACKP"))
             {
                 fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BOptions");
-                fstream >> m_resetSGDMomentumAfterAggregation;
-                fstream.GetMarker(FileMarker::fileMarkerEndSection, L"EOptions");
+                EnsureCheckpointConsistency(fstream, m_resetSGDMomentumAfterAggregation, "resetSGDMomentum");
+                
+                if (ckpVersion > 2)
+                {
+                    EnsureCheckpointConsistency(fstream, m_useNesterovMomentum, "useNesterovMomentum");
+                    EnsureCheckpointConsistency(fstream, m_blockLearningRate, "blockLearningRate");
+                    EnsureCheckpointConsistency(fstream, m_blockMomentumAsTimeConstantPerWorker, "blockMomentumAsTimeConstant (per worker)");
+                    EnsureCheckpointConsistency(fstream, m_syncPeriodPerWorker, "syncPeriod (per worker)");
 
-                fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BMomentumAsTimeConstant");
-                fstream >> m_blockMomentumAsTimeConstantPerWorker;
-                fstream.GetMarker(FileMarker::fileMarkerEndSection, L"EMomentumAsTimeConstant");
+                    fstream.GetMarker(FileMarker::fileMarkerEndSection, L"EOptions");
+                }
+                else
+                {
+                    fstream.GetMarker(FileMarker::fileMarkerEndSection, L"EOptions");
 
-                fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BSyncPeriodInSamples");
-                fstream >> m_syncPeriodPerWorker;
-                fstream.GetMarker(FileMarker::fileMarkerEndSection, L"ESyncPeriodInSamples");
+                    fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BMomentumAsTimeConstant");
+                    EnsureCheckpointConsistency(fstream, m_blockMomentumAsTimeConstantPerWorker, "blockMomentumAsTimeConstant (per worker)");
+                    fstream.GetMarker(FileMarker::fileMarkerEndSection, L"EMomentumAsTimeConstant");
+
+
+                    fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BSyncPeriodInSamples");
+                    EnsureCheckpointConsistency(fstream, m_syncPeriodPerWorker, "syncPeriod (per worker)");
+                    fstream.GetMarker(FileMarker::fileMarkerEndSection, L"ESyncPeriodInSamples");
+                }
 
                 fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BParam");
                 LoadParameters(fstream, m_prevParameters, m_deviceId);
@@ -224,6 +234,19 @@ namespace Microsoft { namespace MSR { namespace CNTK {
             }
         }
     private:
+        // helper function to verify that the value retrieved form the checkpoint is consistent 
+        // with the expected parameter value (passed in the constructor).
+        template <typename T>
+        void EnsureCheckpointConsistency(File& fstream, const T& expectedValue, const string& description)
+        {
+            T actualValue;
+            fstream >> actualValue;
+            if (actualValue != expectedValue)
+            {
+                RuntimeError("Value '%s' restored from the checkpoint does not match the value specified in the config.",
+                             description.c_str());
+            }
+        }
        // helper function to save/load map<wstring, shared_ptr<Matrix<ElemType>> structure 
        void SaveParameters(File& f, const map<wstring, shared_ptr<Matrix<ElemType>>>& parameters) const
         {
@@ -265,6 +288,7 @@ namespace Microsoft { namespace MSR { namespace CNTK {
            }
        }
 
+       DISABLE_COPY_AND_MOVE(BlockMomentumSGD);
 
     public:
 
