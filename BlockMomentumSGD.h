@@ -1,7 +1,8 @@
 //
-// <copyright file="BlockMomentumSGD.h" company="Microsoft">
-//     Copyright (c) Microsoft Corporation.  All rights reserved.
-// </copyright>
+// Copyright (c) Microsoft. All rights reserved.
+//
+// Licensed under custom Microsoft Research License 
+// See LICENSE.md file in the project root for full license information.
 //
 #pragma  once 
 
@@ -13,9 +14,9 @@ namespace Microsoft { namespace MSR { namespace CNTK {
 
     // Implementation of Blockwise Model Update and Filtering (BMUF, a.k.a. block momentum) 
     // For detail, see the following paper
-    // Kai Chen and Qiang Huo, “Scalable training of deep learning machines by incremental block training 
-    // with intra-block parallel optimization and blockwise model-update filtering”, 
-    // in Internal Conference on Acoustics, Speech and Signal Processing , March 2016, Shanghai, China. 
+    // Kai Chen and Qiang Huo, "Scalable training of deep learning machines by incremental block training 
+    // with intra-block parallel optimization and blockwise model-update filtering", 
+    // in International Conference on Acoustics, Speech and Signal Processing , March 2016, Shanghai, China. 
 
     template<typename ElemType>
     class BlockMomentumSGD : public IMASGD<ElemType>
@@ -27,22 +28,25 @@ namespace Microsoft { namespace MSR { namespace CNTK {
     
      protected:
         bool m_resetSGDMomentumAfterAggregation; 
-        double m_blockMomentum; 
+        bool m_useNesterovMomentum;
+        double m_blockLearningRate; 
+        double m_blockMomentumAsTimeConstantPerWorker; 
+        size_t m_syncPeriodPerWorker; 
         map < wstring, shared_ptr<Matrix<ElemType>>>     m_prevParameters;       // parameters at the last model aggregation point
         map < wstring, shared_ptr<Matrix<ElemType>>>    m_blockLevelSmoothedGradient; 
 
     public:
-        BlockMomentumSGD(const MPIWrapperPtr& pMPI, size_t reportFreq, DEVICEID_TYPE devID, bool resetSGDM, double blockMomentum)
+        BlockMomentumSGD(const MPIWrapperPtr& pMPI, size_t reportFreq, DEVICEID_TYPE devID, 
+                        bool useNestrovMomentum, bool resetSGDM, 
+                        double blockLearningRate, 
+                        double blockMomentumAsTimeConstant, size_t syncPeriod)
             :IMASGD<ElemType>(pMPI, reportFreq, devID)
         {
-            m_blockMomentum = blockMomentum; 
+            m_syncPeriodPerWorker = syncPeriod / pMPI->NumNodesInUse();
+            m_blockMomentumAsTimeConstantPerWorker = blockMomentumAsTimeConstant / pMPI->NumNodesInUse(); 
+            m_useNesterovMomentum = useNestrovMomentum;
             m_resetSGDMomentumAfterAggregation = resetSGDM; 
-            fprintf(stderr, "Parallel training (%d workers) using BlockMomentum: useNesterovMomentum=true, blockMomentum=%6.4f, resetSGDMomentum=%s, preferredDeviceID=%d\n",
-                (int)m_pMPI->NumNodesInUse(),
-                m_blockMomentum,
-                m_resetSGDMomentumAfterAggregation ? "true" : "false", 
-                m_deviceId
-                );
+            m_blockLearningRate = blockLearningRate;
         }
 
         /*virtual*/ void OnEpochStart(const std::list<ComputationNodeBasePtr>& LearnableNodes) override
@@ -72,31 +76,29 @@ namespace Microsoft { namespace MSR { namespace CNTK {
                 {
                     m_prevParameters[name]->SetValue(NodeValue);
                 }
-                // related with nestrov momentum, adjust it before training start
-                Matrix<ElemType> V(m_blockLevelSmoothedGradient[name]->DeepClone());
-                Matrix<ElemType>::Scale((ElemType)m_blockMomentum, V);
-                NodeValue -= V;
             }
+            fprintf(stderr, "Parallel training (%d workers) using BlockMomentumSGD with "
+                            "block momentum = %6.4f, "
+                            "block momentum time constant (per worker) = %6.4f, "
+                            "block learning rate = %6.4f, "
+                            "block size per worker = %d samples, "
+                            "%s"
+                            "%s"
+                            "\n",
+                            (int)m_pMPI->NumNodesInUse(),      
+                            BlockMomentumSGD<double>::TimeConstant2Momentum(m_blockMomentumAsTimeConstantPerWorker, m_syncPeriodPerWorker), 
+                            m_blockMomentumAsTimeConstantPerWorker,
+                            m_blockLearningRate, 
+                            (int)m_syncPeriodPerWorker, 
+                            m_useNesterovMomentum ? "using Nesterov-style block momentum, " : "" , 
+                            m_resetSGDMomentumAfterAggregation ? "resetting SGD momentum after sync." : "."
+                );
         }
         /*virtual*/ void OnEpochEnd(const std::list<ComputationNodeBasePtr>& LearnableNodes, 
             std::list<Matrix<ElemType>>&                smoothedGradient,
             size_t                                      samplesSinceLastSync) override
         {
             Base::OnEpochEnd(LearnableNodes, smoothedGradient, samplesSinceLastSync);
-            for (auto& pNode : LearnableNodes)
-            {
-                auto pnode = DownCast(pNode);
-                wstring name = pNode->NodeName();
-                if (m_blockLevelSmoothedGradient.find(name) == m_blockLevelSmoothedGradient.end())
-                {
-                    LogicError("Cannot find block information for node %ls. Contact erw@microsoft.com\n", name.c_str());
-                    // TODO: remove this part
-                }
-                Matrix<ElemType>& W = pnode->Value();
-                Matrix<ElemType> V(m_blockLevelSmoothedGradient[name]->DeepClone());
-                Matrix<ElemType>::Scale((ElemType)m_blockMomentum, V);
-                W += V;
-            }
         }
         /*virtual*/ void ModelAggregationProcessing(
             size_t samplesSinceLastSync,
@@ -107,32 +109,18 @@ namespace Microsoft { namespace MSR { namespace CNTK {
             ) override
         {
             //----------------------------------------
-            // 1. communicate with other nodes to negotiate  contribution weights
+            // 1. communicate with other nodes to negotiate contribution weights
             //----------------------------------------
-            float factor = 0;
             int   nTotalSamples = samplesSinceLastSync;
+            ElemType blockMomentum = (ElemType)BlockMomentumSGD<double>::TimeConstant2Momentum(m_blockMomentumAsTimeConstantPerWorker, m_syncPeriodPerWorker);
             Timer commTimer;
             secondsOnCommunication = 0.0f;
             commTimer.Start();
             m_pMPI->AllReduce(&nTotalSamples, 1);
             commTimer.Stop();
             secondsOnCommunication += (float)commTimer.ElapsedSeconds();
+            totalSamplesProcessed = nTotalSamples;
 
-            if (nTotalSamples <= 0)
-            {
-                // prepare for overflow 
-                factor = 1.0f / m_pMPI->NumNodesInUse();
-                totalSamplesProcessed = samplesSinceLastSync * m_pMPI->NumNodesInUse();
-                // give an estimated one 
-            }
-            else
-            {
-                factor = (samplesSinceLastSync + 0.0f) / nTotalSamples;
-                totalSamplesProcessed = nTotalSamples;
-            }
-            //----------------------------------------
-            // 2. process for each individual node
-            //----------------------------------------
             for (auto& pBaseNode : learnableNodes)
             {
                 if (!pBaseNode->IsParameterUpdateRequired())
@@ -140,41 +128,53 @@ namespace Microsoft { namespace MSR { namespace CNTK {
                     continue;
                 }
                 wstring name = pBaseNode->NodeName();
-                // 2.1 model averaging
+                // 2 block gradient aggregation 
                 auto pNode = DownCast(pBaseNode);
-                // 2.1.1. average model from individual models 
-                Matrix<ElemType> mat(pNode->Value().DeepClone()); // pNode->Value returns lvalue, so a deep copy is invoked here
-                // 2.1.2. normalize the weight matrix 
-                Matrix<ElemType>::Scale(factor, mat);
-                // 2.1.3. send weight matrix over MPI nodes; 
-                unique_ptr<ElemType[]> px(mat.CopyToArray());
-                //ElemType* px = mat.CopyToArray();
-                size_t    nx = mat.GetNumElements();
+                // 2.1. get current model  
+                Matrix<ElemType>& prevWeight = *m_prevParameters[name];               // prev model value 
+                Matrix<ElemType>& currentWeight = pNode->Value();                        // current model 
+                // 2.1.2. subtract it from the previous model                   
+                Matrix<ElemType>  blockGrad(prevWeight.DeepClone());            
+                blockGrad -= currentWeight;                                              // matW becomes local block gradient (of one worker)
+                // 2.1.3. send block gradient over MPI nodes; 
+                unique_ptr<ElemType[]> px(blockGrad.CopyToArray());
+                size_t    nx = blockGrad.GetNumElements();
                 // 2.1.4. inplace sum 
                 commTimer.Restart();
                 m_pMPI->AllReduce(px.get(), nx);
                 commTimer.Stop();
                 secondsOnCommunication += (float)commTimer.ElapsedSeconds();
-                // 2.1.5. averaged model
-                mat.SetValue(mat.GetNumRows(), mat.GetNumCols(), mat.GetDeviceId(), px.get());
-                // 2.2. blockwise model update and filtering 
+                // 2.1.5. global block gradient
+                blockGrad.SetValue(blockGrad.GetNumRows(),
+                                   blockGrad.GetNumCols(),
+                                   blockGrad.GetDeviceId(),
+                                   px.get()
+                                   ); 
+                // 2.2. model update 
                 {
-                    // some alias for better readability 
-                    Matrix<ElemType>& V = *m_blockLevelSmoothedGradient[name];       // smoothed gradient 
-                    Matrix<ElemType>& W = pNode->Value();                           // model value 
-                    Matrix<ElemType>& preW = *m_prevParameters[name];               // prev model value 
-                    Matrix<ElemType>& negG = mat;                                   // negative gradient
-                    negG -= preW;                                                   // (W^-W_{t-1})
-
-                    // 2.2.1 update block level smoothed gradient;
-                    Matrix<ElemType>::Scale((ElemType)m_blockMomentum, V);
-                    V -= negG;                                                  // V_t=\eta*V_{t-1}-(W^-W_{t-1})
+                    // alias for better readability 
+                    Matrix<ElemType>& smoothedGradient = *m_blockLevelSmoothedGradient[name];       // smoothed gradient                   
+                    // 2.2.1 update block level smoothed gradient; 
+                    // This is essentially a first-order infinite impulse response (IIR) filter with the gain (1 - blockMomentum)*m_blockLearningRate:
+                    // smoothedGradient(t)=blockMomentum * smoothedGradients(t-1) + (1 - blockMomentum)*m_blockLearningRate*blockGrad(t)
+                    Matrix<ElemType>::ScaleAndAdd((ElemType)((1 - blockMomentum)*m_blockLearningRate), blockGrad, (ElemType)blockMomentum, smoothedGradient); 
                     // 2.2.2 update parameters; 
-                    W.SetValue(*m_prevParameters[name]);
-                    Matrix<ElemType>::ScaleAndAdd((ElemType)-m_blockMomentum, V, W); // W_t=W_{t-1}-\eta*V_t + (W^-W_{t-1})
-                    W += negG;
-                    // 2.2.3 update previous model parameters;
-                    preW.SetValue(W);
+                    currentWeight.SetValue(prevWeight);
+                    currentWeight -= smoothedGradient;
+                    // 2.2.3 Nesterov Momentum 
+                    // A Nesterov momentum here is to do a partial weight update before calculating the gradient, i.e., 
+                    // (step 1) w(t) <-- w(t) - \eta* v(t) 
+                    // (step 2) g(t+1) <-- forwardbackward on minibatches with initial model as w(t)
+                    // (step 3) v(t+1) <-- \eta*v(t) + (1-\eta)*learningRate*g(t+1)
+                    // (step 4) w(t+1) <-- w(t)-v(t)
+                    // (step 5) t      <-- t+1
+                    // without step 1, this becomes stanard momentum
+                    if (m_useNesterovMomentum)
+                    {
+                        Matrix<ElemType>::ScaleAndAdd((ElemType)-blockMomentum, smoothedGradient, currentWeight);
+                    }
+                    // 2.2.4 update bookkeeping
+                    prevWeight.SetValue(currentWeight);
                 }
             }
             //----------------------------------------
@@ -189,10 +189,6 @@ namespace Microsoft { namespace MSR { namespace CNTK {
             }
         }
 
-        /*virtual*/ bool RequiresToSaveToCheckPoint() override
-        {
-            return true;
-        }
         /*virtual*/ void SaveToCheckPoint(File& fstream) override
         {
             if (m_pMPI->IsMainNode())
@@ -202,9 +198,13 @@ namespace Microsoft { namespace MSR { namespace CNTK {
                 fstream << m_resetSGDMomentumAfterAggregation;
                 fstream.PutMarker(FileMarker::fileMarkerEndSection, L"EOptions");
 
-                fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BMomentum");
-                fstream << m_blockMomentum;
-                fstream.PutMarker(FileMarker::fileMarkerEndSection, L"EMomentum");
+                fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BMomentumAsTimeConstant");
+                fstream << m_blockMomentumAsTimeConstantPerWorker; 
+                fstream.PutMarker(FileMarker::fileMarkerEndSection, L"EMomentumAsTimeConstant");
+
+                fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BSyncPeriodInSamples"); 
+                fstream << m_syncPeriodPerWorker; 
+                fstream.PutMarker(FileMarker::fileMarkerEndSection, L"ESyncPeriodInSamples");
 
                 fstream.PutMarker(FileMarker::fileMarkerBeginSection, L"BParam");
                 SaveParameters(fstream, m_prevParameters);
@@ -222,15 +222,13 @@ namespace Microsoft { namespace MSR { namespace CNTK {
                 fstream >> m_resetSGDMomentumAfterAggregation;
                 fstream.GetMarker(FileMarker::fileMarkerEndSection, L"EOptions");
 
-                fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BMomentum");
-                fstream >> m_blockMomentum;
-                fstream.GetMarker(FileMarker::fileMarkerEndSection, L"EMomentum");
-                // logical change 
-                if (m_blockMomentum < 0 || m_blockMomentum > 1.0)
-                {
-                    LogicError("Error in loading MASGD checkpoint: loading a momentum %f, but expect a block-momentum in [0,1].\n",
-                        m_blockMomentum);
-                }
+                fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BMomentumAsTimeConstant");
+                fstream >> m_blockMomentumAsTimeConstantPerWorker;
+                fstream.GetMarker(FileMarker::fileMarkerEndSection, L"EMomentumAsTimeConstant");
+
+                fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BSyncPeriodInSamples");
+                fstream >> m_syncPeriodPerWorker;
+                fstream.GetMarker(FileMarker::fileMarkerEndSection, L"ESyncPeriodInSamples");
 
                 fstream.GetMarker(FileMarker::fileMarkerBeginSection, L"BParam");
                 LoadParameters(fstream, m_prevParameters, m_deviceId);
@@ -239,59 +237,63 @@ namespace Microsoft { namespace MSR { namespace CNTK {
 
                 fstream.GetMarker(FileMarker::fileMarkerEndSection, L"EMACKP");
             }
-            /* else 
-            {
-                // no MA checkpoint info, don't need to do anything here. 
-                // It will still be initialized in OnEpochStart() function
-            }
-            */
         }
     private:
        // helper function to save/load map<wstring, shared_ptr<Matrix<ElemType>> structure 
        void SaveParameters(File& f, const map<wstring, shared_ptr<Matrix<ElemType>>>& parameters) const
+        {
+            // save sizeof(ElemType)
+            unsigned int size = sizeof(ElemType);
+            f << size;
+            // save number of pairs 
+            unsigned int numPairs = parameters.size();
+            f << numPairs;
+            for (auto& x : parameters)
             {
-                // save sizeof(ElemType)
-                unsigned int size = sizeof(ElemType);
-                f << size;
-                // save number of pairs 
-                unsigned int numPairs = parameters.size();
-                f << numPairs;
-                for (auto& x : parameters)
-                {
-                    f << x.first;
-                    f << *x.second;
-                }
-                f.Flush();
-                return;
+                f << x.first;
+                f << *x.second;
             }
+            f.Flush();
+            return;
+        }
        void LoadParameters(File& f, map<wstring, shared_ptr<Matrix<ElemType>>>& parameters, DEVICEID_TYPE deviceID)
-            {
-                unsigned int size = 0;
-                unsigned int pair = 0;
-                f >> size;
-                f >> pair;
-                if (size != sizeof(ElemType))
-                {
-                    LogicError("Mismatched ElemType in loading MASGD checkpoint. Expecting %s, while loading element size=%d\n",
-                        sizeof(ElemType) == 4 ? "float" : "double",
-                        size
-                        );
-                }
-                parameters.clear();
-                for (size_t i = 0; i < pair; i++)
-                {
-                    wstring name;
-                    f >> name;
-                    shared_ptr<Matrix<ElemType>> mat = make_shared<Matrix<ElemType>>(deviceID);
-                    f >> *mat;
-                    parameters[name] = mat;
-                }
+       {
+           unsigned int size = 0;
+           unsigned int pair = 0;
+           f >> size;
+           f >> pair;
+           if (size != sizeof(ElemType))
+           {
+               LogicError("Mismatched ElemType in loading BlockMomentumSGD checkpoint. Expecting %s, while loading element size=%d\n",
+                   sizeof(ElemType) == 4 ? "float" : "double",
+                   size
+                   );
+           }
+           parameters.clear();
+           for (size_t i = 0; i < pair; i++)
+           {
+               wstring name;
+               f >> name;
+               shared_ptr<Matrix<ElemType>> mat = make_shared<Matrix<ElemType>>(deviceID);
+               f >> *mat;
+               parameters[name] = mat;
+           }
+       }
 
-            }
 
+    public:
+
+       static double TimeConstant2Momentum(double timeConstant, size_t syncPeroid)
+       {
+           return exp(-((double)syncPeroid) / timeConstant);
+       }
+       static double Momentum2TimeConstant(double bm, size_t syncPeroid)
+       {
+           if (bm >= 1.0 || bm < 0.0)
+           {
+               InvalidArgument("Unexpected block momentum (%.2f). Block momentum should be in the range of [0,1)\n", bm);
+           }
+           return -(double)syncPeroid / log(bm); 
+       }
     };
-
-
-
-
 } } }
