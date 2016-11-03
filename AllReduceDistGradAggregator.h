@@ -239,12 +239,23 @@ public:
 
     void AggregateGradientsImpl(const std::vector<Matrix<ElemType>*>& gradients, DistGradHeader* headerCPU, bool showSyncPerfStats)
     {
-        Timer aggregationTimer;
+        Timer aggregationTimer, fineGrainTimer;
+
+        // Declare variables needed for fine grain perf measurements
+        double computeFlushTime, quantTime, unquantTime, waitAllSendGradStripes, waitAnyRecvGradStripes, waitAllSendAggGradStripes, waitAllRecvAggGradStripes;
+
         int deviceId = gradients[0]->GetDeviceId();
         if (showSyncPerfStats)
         {
             std::unique_ptr<MatrixComputeStreamEvent> mainStreamSyncEvent(MatrixComputeStreamEvent::Create(deviceId));
+
+            // Measure time needed to flush the compute event. If all is well, this time should be approaching 0, since
+            // there is another synchronization point before this one.
+            fineGrainTimer.Start();
             mainStreamSyncEvent->SynchronizeEvent();
+            fineGrainTimer.Stop();
+            computeFlushTime = fineGrainTimer.ElapsedSeconds();
+
             aggregationTimer.Start();
         }
 
@@ -288,6 +299,9 @@ public:
             aggGradStripes.push_back(std::unique_ptr<Matrix<ElemType>>(currAggGradStripe));
             aggGradStripesQuantized.push_back(std::unique_ptr<QuantizedMatrix<ElemType>>(currAggGradStripeQuantized));
         }
+
+        // Start the timer to measure quantization times
+        fineGrainTimer.Restart();
 
         // Initiate quantization of the gradient matrices
         for (size_t i = 0; i < numGradMatrices; ++i)
@@ -380,6 +394,10 @@ public:
             }
         }
 
+        // This is where all matrices should be quantized
+        fineGrainTimer.Stop();
+        quantTime = fineGrainTimer.ElapsedSeconds();
+
         // Send the headers from all nodes but the main node
         MPI_Request sendHeaderRequest;
         if (!m_mpi->IsMainNode())
@@ -389,10 +407,14 @@ public:
         size_t numReceivesExpected = recvGradStripesQuantizedRequests.size();
         size_t numActualReceives = 0;
         std::vector<int> perGradMatrixReceiveCount(recvRequestIdxToGradientMatrixIdxMap.size(), 0);
+
+        fineGrainTimer.Restart();
         while (numActualReceives < numReceivesExpected)
         {
             int idx = MPI_UNDEFINED;
+
             MPI_Waitany(recvGradStripesQuantizedRequests.size(), recvGradStripesQuantizedRequests.data(), &idx, MPI_STATUS_IGNORE) || MpiFail("MPI_Waitany");
+
             if (idx == MPI_UNDEFINED)
             {
                 break;
@@ -437,6 +459,8 @@ public:
                 m_aggGradStripeQuantizers[gradMatrixIdx]->QuantizeAsync(*(aggGradStripes[gradMatrixIdx]), *(aggGradStripesQuantized[gradMatrixIdx]), m_zeroThresholdFor1Bit);
             }
         }
+        fineGrainTimer.Stop();
+        waitAnyRecvGradStripes = fineGrainTimer.ElapsedSeconds();
 
         assert(numActualReceives == numReceivesExpected);
 
@@ -516,6 +540,7 @@ public:
             }
         }
 
+        fineGrainTimer.Start();
         // Wait to receive all aggregated stripes and unquantize
         for (size_t i = 0; i < numGradMatrices; ++i)
         {
@@ -523,11 +548,14 @@ public:
 
             m_preAggGradQuantizers[i]->UnquantizeAsync(*(m_gradQuantized[i]), *(gradients[i]), false);
         }
+        fineGrainTimer.Stop();
+        waitAllRecvAggGradStripes = fineGrainTimer.ElapsedSeconds();
 
         // Wait to receive aggregate header
         if (!m_mpi->IsMainNode())
             MPI_Wait(&recvAggHeaderRequest, MPI_STATUSES_IGNORE) || MpiFail("MPI_Wait");
 
+        fineGrainTimer.Start();
         // Wait for all the unquantizations to finish
         for (size_t i = 0; i < numGradMatrices; ++i)
         {
@@ -540,22 +568,32 @@ public:
                 PrintMatrix(printHeaderBuf, gradients[i]);
             }
         }
+        fineGrainTimer.Stop();
+        unquantTime = fineGrainTimer.ElapsedSeconds();
 
+        fineGrainTimer.Start();
         // Wait for completion of the async send requests
         for (int i = 0; i < sendGradStripesQuantizedRequests.size(); ++i)
         {
             if (sendGradStripesQuantizedRequests[i].size() > 0)
+            {
                 MPI_Waitall(sendGradStripesQuantizedRequests[i].size(), sendGradStripesQuantizedRequests[i].data(), MPI_STATUSES_IGNORE) || MpiFail("MPI_Waitall");
+            }
         }
+        fineGrainTimer.Stop();
+        waitAllSendGradStripes = fineGrainTimer.ElapsedSeconds();
 
         if (!m_mpi->IsMainNode())
             MPI_Wait(&sendHeaderRequest, MPI_STATUSES_IGNORE) || MpiFail("MPI_Wait");
 
+        fineGrainTimer.Start();
         for (int i = 0; i < sendAggGradStripeQuantizedRequests.size(); ++i)
         {
             if (sendAggGradStripeQuantizedRequests[i].size() > 0)
                 MPI_Waitall(sendAggGradStripeQuantizedRequests[i].size(), sendAggGradStripeQuantizedRequests[i].data(), MPI_STATUSES_IGNORE) || MpiFail("MPI_Waitall");
         }
+        fineGrainTimer.Stop();
+        waitAllSendAggGradStripes = fineGrainTimer.ElapsedSeconds();
 
         if (m_mpi->IsMainNode())
             MPI_Waitall(sendAggHeaderRequests.size(), sendAggHeaderRequests.data(), MPI_STATUSES_IGNORE) || MpiFail("MPI_Waitall");
@@ -564,7 +602,8 @@ public:
         {
             aggregationTimer.Stop();
             double gradientAggregationTime = aggregationTimer.ElapsedSeconds();
-            fprintf(stderr, "Actual gradient aggregation time: %.6g\n", gradientAggregationTime);
+            fprintf(stderr, "Gradient aggregation time: %.6g; Compute flush: %.6g, Quantization: %.6g, Unquantization: %.6g, Send wait: %.6g, Recv wait: %.6g, Send agg wait: %.6g, Recv agg wait %.6g\n",
+                gradientAggregationTime, computeFlushTime, quantTime, unquantTime, waitAllSendGradStripes, waitAnyRecvGradStripes, waitAllSendAggGradStripes, waitAllRecvAggGradStripes);
         }
     }
 
