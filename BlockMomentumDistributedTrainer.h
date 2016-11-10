@@ -62,7 +62,7 @@ namespace CNTK
         }
 
         // Optional override that gets called per minibatch after finishing gradient computation but before updating model parameters
-        void PreParameterUpdateCallback(const Trainer& trainer, std::vector<std::pair<Parameter, NDArrayViewPtr>>& parameters, MinibatchInfo& info) override
+        void PreParameterUpdateCallback(const Trainer& trainer, std::vector<std::pair<Parameter, NDArrayViewPtr>>& parameters, ExtendedMinibatchInfo& info) override
         {
             m_numSamplesSeenInCurrentBlock += info.numberOfSamples;
             if (m_numSamplesSeenInCurrentBlock < m_syncPeriodPerWorker)
