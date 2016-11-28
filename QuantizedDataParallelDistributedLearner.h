@@ -10,27 +10,28 @@
 
 #include <vector>
 #include "CNTKLibrary.h"
-#include "DistributedTrainerBase.h"
+#include "DistributedLearnerBase.h"
 
 namespace CNTK
 {
     ///
     /// Quantized Distributed Trainer.
     ///
-    class QuantizedDataParallelDistributedTrainer : public DistributedTrainerBase
+    class QuantizedDataParallelDistributedLearner : public DistributedLearnerBase
     {
     public:
-        QuantizedDataParallelDistributedTrainer(QuantizedDistributedCommunicatorPtr communicator, bool useAsyncBufferedParameterUpdate, size_t distributedAfterSampleCount)
-            : DistributedTrainerBase(communicator, distributedAfterSampleCount)
+        QuantizedDataParallelDistributedLearner(QuantizedDistributedCommunicatorPtr communicator, bool useAsyncBufferedParameterUpdate, const std::vector<LearnerPtr>& learners)
+            : DistributedLearnerBase(communicator, learners)
         {
             if (useAsyncBufferedParameterUpdate)
                 LogicError("Asynchronous parameter update is not yet supported.");
         }
 
         // Optional override that gets called per minibatch after finishing gradient computation but before updating model parameters
-        bool PreParameterUpdateCallback(const Trainer& /*trainer*/, std::vector<std::pair<Parameter, NDArrayViewPtr>>& gradientValues, MinibatchInfo& info) override
+        bool Update(std::vector<std::pair<Parameter, NDArrayViewPtr>>& gradientValues, MinibatchInfo& info, size_t& totalNumberOfSampleSeen) override
         {
-            HandleEmptyMinibatch(gradientValues, info);
+            if (info.IsEmpty())
+                PrepaireZeroGradients(gradientValues, info);
 
             std::vector<NDArrayViewPtr> headerToAggregate;
             headerToAggregate.push_back(info.evalCriterionValue);
@@ -53,11 +54,14 @@ namespace CNTK
                 m_stripeResiduals,
                 m_communicator->Workers());
 
-            return info.numberOfSamples == 0;
+            totalNumberOfSampleSeen += info.numberOfSamples;
+            m_learner->Update(gradientValues, info, totalNumberOfSampleSeen);
+
+            return info.IsEmpty();
         }
 
         // Optionally overridable method to get checkpoint state associated with this Distributed train method
-        Dictionary CreateCheckpoint(const Trainer& trainer, const Dictionary& localStateToShare) override
+        Dictionary CreateCheckpoint() override
         {
             // Resetting the residuals.
             // We do this to make sure that the returned checkpoint state is consistent with the in - memory state, since we do not checkpoint the residues.
@@ -74,7 +78,7 @@ namespace CNTK
                     else
                         m_stripeResiduals[i]->SetValue(0.0f);
 
-            return DistributedTrainerBase::CreateCheckpoint(trainer, localStateToShare);
+            return Dictionary();
         }
 
     private:
