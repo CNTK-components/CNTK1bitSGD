@@ -20,8 +20,8 @@ namespace CNTK
     class QuantizedDataParallelDistributedLearner : public DistributedLearnerBase
     {
     public:
-        QuantizedDataParallelDistributedLearner(QuantizedDistributedCommunicatorPtr communicator, bool useAsyncBufferedParameterUpdate, const std::vector<LearnerPtr>& learners)
-            : DistributedLearnerBase(communicator, learners)
+        QuantizedDataParallelDistributedLearner(QuantizedDistributedCommunicatorPtr communicator, const std::vector<LearnerPtr>& learners, size_t distributeAfterSamples, bool useAsyncBufferedParameterUpdate)
+            : DistributedLearnerBase(communicator, learners, distributeAfterSamples)
         {
             if (useAsyncBufferedParameterUpdate)
                 LogicError("Asynchronous parameter update is not yet supported.");
@@ -30,34 +30,39 @@ namespace CNTK
         // Optional override that gets called per minibatch after finishing gradient computation but before updating model parameters
         bool Update(std::vector<std::pair<Parameter, NDArrayViewPtr>>& gradientValues, MinibatchInfo& info, size_t& totalNumberOfSampleSeen) override
         {
-            if (info.IsEmpty())
-                PrepaireZeroGradients(gradientValues, info);
+            if (m_totalNumberOfSamplesSeen > m_distributeAfterSamples)
+            {
+                if (info.IsEmpty())
+                    PrepaireZeroGradients(gradientValues, info);
 
-            std::vector<NDArrayViewPtr> headerToAggregate;
-            headerToAggregate.push_back(info.evalCriterionValue);
-            headerToAggregate.push_back(info.trainingLossValue);
+                std::vector<NDArrayViewPtr> headerToAggregate;
+                headerToAggregate.push_back(info.evalCriterionValue);
+                headerToAggregate.push_back(info.trainingLossValue);
 
-            auto value = MakeSharedObject<NDArrayView>(static_cast<double>(info.numberOfSamples), NDShape{ 1 }, DeviceDescriptor::CPUDevice());
-            headerToAggregate.push_back(value);
+                auto value = MakeSharedObject<NDArrayView>(static_cast<double>(info.numberOfSamples), NDShape{ 1 }, DeviceDescriptor::CPUDevice());
+                headerToAggregate.push_back(value);
 
-            m_communicator->AggregateInPlace(headerToAggregate, m_communicator->Workers());
+                m_communicator->AggregateInPlace(headerToAggregate, m_communicator->Workers());
 
-            info.numberOfSamples = static_cast<size_t>(*headerToAggregate.back()->DataBuffer<double>());
+                info.numberOfSamples = static_cast<size_t>(*headerToAggregate.back()->DataBuffer<double>());
 
-            std::vector<NDArrayViewPtr> gradients;
-            for (const auto& i : gradientValues)
-                gradients.push_back(i.second);
+                std::vector<NDArrayViewPtr> gradients;
+                for (const auto& i : gradientValues)
+                    gradients.push_back(i.second);
 
-            dynamic_cast<QuantizedDistributedCommunicator*>(m_communicator.get())->QuantizedAggregateInPlace(
-                gradients,
-                m_residuals,
-                m_stripeResiduals,
-                m_communicator->Workers());
+                dynamic_cast<QuantizedDistributedCommunicator*>(m_communicator.get())->QuantizedAggregateInPlace(
+                    gradients,
+                    m_residuals,
+                    m_stripeResiduals,
+                    m_communicator->Workers());
+            }
 
-            totalNumberOfSampleSeen += info.numberOfSamples;
-            m_learner->Update(gradientValues, info, totalNumberOfSampleSeen);
+            m_totalNumberOfSamplesSeen += info.numberOfSamples;
+            totalNumberOfSampleSeen = m_totalNumberOfSamplesSeen;
 
-            return info.IsEmpty();
+            size_t ignored = 0;
+            auto result = m_learner->Update(gradientValues, info, ignored);
+            return result && !info.IsEmpty();
         }
 
         // Optionally overridable method to get checkpoint state associated with this Distributed train method
@@ -78,7 +83,7 @@ namespace CNTK
                     else
                         m_stripeResiduals[i]->SetValue(0.0f);
 
-            return Dictionary();
+            return DistributedLearnerBase::CreateCheckpoint();
         }
 
     private:

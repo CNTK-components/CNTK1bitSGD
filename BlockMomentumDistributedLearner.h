@@ -11,6 +11,7 @@
 #include <vector>
 #include "CNTKLibrary.h"
 #include "DistributedLearnerBase.h"
+#include <numeric>
 
 namespace CNTK
 {
@@ -25,6 +26,7 @@ namespace CNTK
         BlockMomentumDistributedLearner(
             DistributedCommunicatorPtr communicator,
             const std::vector<LearnerPtr>& learners,
+            size_t distributedAfterSamples,
             size_t globalModelAggregationBlockSize,
             bool useNesterovMomentum,
             bool resetSGDMomentumAfterAggregation,
@@ -32,6 +34,7 @@ namespace CNTK
             : BlockMomentumDistributedLearner(
                   communicator,
                   learners,
+                  distributedAfterSamples,
                   globalModelAggregationBlockSize,
                   useNesterovMomentum,
                   resetSGDMomentumAfterAggregation,
@@ -42,12 +45,13 @@ namespace CNTK
         BlockMomentumDistributedLearner(
             DistributedCommunicatorPtr communicator,
             const std::vector<LearnerPtr>& learners,
+            size_t distributedAfterSamples,
             size_t globalModelAggregationBlockSize,
             bool useNesterovMomentum,
             bool resetSGDMomentumAfterAggregation,
             double blockLearningRate,
             double blockMomentumAsTimeConstant)
-            : DistributedLearnerBase(communicator, learners),
+            : DistributedLearnerBase(communicator, learners, distributedAfterSamples),
             m_useNesterovMomentum(useNesterovMomentum),
             m_resetSGDMomentumAfterAggregation(resetSGDMomentumAfterAggregation),
             m_blockLearningRate(blockLearningRate),
@@ -55,38 +59,27 @@ namespace CNTK
             m_globalModelAggregationBlockSize(globalModelAggregationBlockSize),
             m_numSamplesSeenInCurrentBlock(0),
             m_endOfDataReached(false),
-            m_shutdown(false)
+            m_shutdown(false),
+            m_localTotalNumSamplesSeen(0),
+            m_syncPeriodPerWorker(globalModelAggregationBlockSize / communicator->Workers().size())
         {
-            m_syncPeriodPerWorker = globalModelAggregationBlockSize / communicator->Workers().size();
             if (m_syncPeriodPerWorker == 0)
                 InvalidArgument("Sync period is too small.");
         }
 
-        // Optional override that gets called per minibatch after finishing gradient computation but before updating model parameters
         bool Update(std::vector<std::pair<Parameter, NDArrayViewPtr>>& gradientValues, MinibatchInfo& info, size_t& totalNumberOfSampleSeen) override
         {
-            // If the last minibatch, set the end of data state.
-            if (info.atEndOfData)
-                m_endOfDataReached = true;
+            bool finished = PerformDistributedUpdateIfNeeded(gradientValues, info);
+            totalNumberOfSampleSeen = m_totalNumberOfSamplesSeen;
 
-            std::vector<NDArrayViewPtr> parameters;
-            if (!m_endOfDataReached)
+            // For block momentum the number of aggreagate/checkpoints should match, so for now we ignore the return value of local learners.
+            if (!info.IsEmpty())
             {
-                m_numSamplesSeenInCurrentBlock += info.numberOfSamples;
-                if (m_numSamplesSeenInCurrentBlock < m_syncPeriodPerWorker)
-                {
-                    totalNumberOfSampleSeen += info.numberOfSamples;
-                    return false;
-                }
-
-                m_numSamplesSeenInCurrentBlock = 0;
-                GetParameterValues(gradientValues, parameters);
-                Aggregate(parameters);
-                return false;
+                size_t ignored = 0;
+                m_learner->Update(gradientValues, info, ignored);
             }
 
-            GetParameterValues(gradientValues, parameters);
-            return Shutdown(parameters);
+            return finished;
         }
 
         // Optionally overridable method to get checkpoint state associated with this Distributed train method
@@ -94,6 +87,10 @@ namespace CNTK
         {
             std::vector<NDArrayViewPtr> parameters;
             GetParameterValues(m_learner->Parameters(), parameters);
+
+            // Always aggregate before the checkpoint
+            SynchronizeAction(Action::Aggregate);
+            AggregateImpl(parameters);
 
             // During checkpoint, other workers could be in aggregation state. Let's allow them to finish aggregation.
             Action action;
@@ -105,20 +102,60 @@ namespace CNTK
                     RuntimeError("Unexpected action received.");
             }
 
-            return DistributedLearnerBase::CreateCheckpoint();
+            Dictionary result;
+            result[L"base"] = DistributedLearnerBase::CreateCheckpoint();
+            result[L"localTotalNumSamplesSeen"] = m_localTotalNumSamplesSeen;
+            return result;
         }
 
-        void Shutdown() override
+        void RestoreFromCheckpoint(const Dictionary& checkpoint) override
+        {
+            m_localTotalNumSamplesSeen = checkpoint[L"localTotalNumSamplesSeen"].Value<size_t>();
+            DistributedLearnerBase::RestoreFromCheckpoint(checkpoint[L"base"].Value<Dictionary>());
+        }
+
+        ~BlockMomentumDistributedLearner()
         {
             if (!m_shutdown)
             {
-                std::vector<NDArrayViewPtr> parameters;
-                GetParameterValues(m_learner->Parameters(), parameters);
-                Shutdown(parameters);
+                // It is better to throw from the destructor and crash in this case.
+                RuntimeError(
+                    "Block Momentum Learner was not properly shut down, your training loop is probably wrong, this could lead to hangs."
+                    "Please have a look at the canonical training loop and follow the pattern.");
             }
         }
 
     private:
+        // Optional override that gets called per minibatch after finishing gradient computation but before updating model parameters
+        bool PerformDistributedUpdateIfNeeded(std::vector<std::pair<Parameter, NDArrayViewPtr>>& gradientValues, MinibatchInfo& info)
+        {
+            // If the last minibatch, set the end of data state.
+            if (info.atEndOfData)
+                m_endOfDataReached = true;
+
+            m_localTotalNumSamplesSeen += info.numberOfSamples;
+            m_totalNumberOfSamplesSeen += info.numberOfSamples;
+
+            // TODO: Should be on the higher level of abstraction. Distributed trainer should not even be called during warmup phase.
+            if (m_distributeAfterSamples > m_totalNumberOfSamplesSeen)
+                return !m_endOfDataReached;
+
+            std::vector<NDArrayViewPtr> parameters;
+            if (!m_endOfDataReached)
+            {
+                m_numSamplesSeenInCurrentBlock += info.numberOfSamples;
+                if (m_numSamplesSeenInCurrentBlock < m_syncPeriodPerWorker)
+                    return false;
+
+                GetParameterValues(gradientValues, parameters);
+                Aggregate(parameters);
+                return false;
+            }
+
+            GetParameterValues(gradientValues, parameters);
+            return Shutdown(parameters);
+        }
+
         // Before doing any work, the distributed trainer synchronizes with other trainers to
         // decide what to do next.
         // The priority of actons are:
@@ -169,8 +206,8 @@ namespace CNTK
                     AggregateImpl(parameters);
                     break;
                 case Action::Checkpoint:
-                    CreateCheckpointImpl(parameters);
-                    break;
+                    // Somebody still has to call the checkpoint from the outside.
+                    return false;
                 default:
                     RuntimeError("Unexpected action received.");
                 }
@@ -186,19 +223,33 @@ namespace CNTK
         {
             assert(self == Action::Checkpoint || self == Action::Aggregate || self == Action::Shutdown);
 
-            double action = static_cast<double>(self);
-            auto a = std::make_shared<NDArrayView>(DataType::Double, NDShape{ 1 }, &action, sizeof(double), DeviceDescriptor::CPUDevice());
+            double data[2] = { static_cast<double>(self), static_cast<double>(m_localTotalNumSamplesSeen) };
+            auto a = std::make_shared<NDArrayView>(DataType::Double, NDShape{ 2 }, &data, sizeof(double) * 2, DeviceDescriptor::CPUDevice());
             m_communicator->Concatenate(std::vector<NDArrayViewPtr> { a }, m_actionBuffer, m_communicator->Workers());
             assert(m_actionBuffer.size() == 1);
 
             auto buffer = m_actionBuffer.front()->DataBuffer<double>();
             auto bufferSize = m_actionBuffer.front()->Shape().TotalSize();
             auto bufferEnd = buffer + bufferSize;
-            auto aggregate = std::find_if(buffer, bufferEnd, [](double c) { return static_cast<Action>((int)c) == Action::Aggregate; }) != bufferEnd;
+
+            std::vector<Action> actions;
+            actions.reserve(m_communicator->Workers().size());
+
+            std::vector<size_t> localNumberOfSamples;
+            localNumberOfSamples.reserve(m_communicator->Workers().size());
+
+            for (const double* start = buffer; start != bufferEnd; start +=2)
+            {
+                actions.push_back(static_cast<Action>((int)*start));
+                localNumberOfSamples.push_back(static_cast<size_t>(*(start + 1)));
+            }
+            m_totalNumberOfSamplesSeen = std::accumulate(localNumberOfSamples.begin(), localNumberOfSamples.end(), (size_t)0);
+
+            auto aggregate = std::find_if(actions.begin(), actions.end(), [](Action c) { return c == Action::Aggregate; }) != actions.end();
             if (aggregate)
                 return Action::Aggregate;
 
-            auto checkpoint = std::find_if(buffer, bufferEnd, [](double c) { return static_cast<Action>((int)c) == Action::Checkpoint; }) != bufferEnd;
+            auto checkpoint = std::find_if(actions.begin(), actions.end(), [](Action c) { return c == Action::Checkpoint; }) != actions.end();
             if (checkpoint)
                 return Action::Checkpoint;
 
@@ -210,6 +261,8 @@ namespace CNTK
         {
             if (IsResetRequired(parameters))
                 Reset(parameters);
+
+            m_numSamplesSeenInCurrentBlock = 0;
 
             // Let update the weights.
             if (parameters.front()->GetDataType() == DataType::Double)
@@ -380,13 +433,15 @@ namespace CNTK
             return -(double)syncPeroid / log(bm);
         }
 
-        bool m_resetSGDMomentumAfterAggregation;
-        bool m_useNesterovMomentum;
-        double m_blockLearningRate;
-        double m_blockMomentumAsTimeConstantPerWorker;
-        size_t m_syncPeriodPerWorker;
-        size_t m_globalModelAggregationBlockSize;
+        const bool m_resetSGDMomentumAfterAggregation;
+        const bool m_useNesterovMomentum;
+        const double m_blockLearningRate;
+        const double m_blockMomentumAsTimeConstantPerWorker;
+
+        const size_t m_syncPeriodPerWorker;
+        const size_t m_globalModelAggregationBlockSize;
         size_t m_numSamplesSeenInCurrentBlock;
+        size_t m_localTotalNumSamplesSeen;
 
         // parameters at the last model aggregation point
         std::vector<NDArrayViewPtr> m_prevParameters;
@@ -395,5 +450,7 @@ namespace CNTK
 
         bool m_endOfDataReached;
         bool m_shutdown;
+
+        DISABLE_COPY_AND_MOVE(BlockMomentumDistributedLearner);
      };
 }
