@@ -69,7 +69,7 @@ namespace CNTK
 
         bool Update(std::vector<std::pair<Parameter, NDArrayViewPtr>>& gradientValues, MinibatchInfo& info, size_t& totalNumberOfSampleSeen) override
         {
-            bool finished = PerformDistributedUpdateIfNeeded(gradientValues, info);
+            bool updated = PerformDistributedUpdateIfNeeded(gradientValues, info);
             totalNumberOfSampleSeen = m_totalNumberOfSamplesSeen;
 
             // For block momentum the number of aggreagate/checkpoints should match, so for now we ignore the return value of local learners.
@@ -79,7 +79,7 @@ namespace CNTK
                 m_learner->Update(gradientValues, info, ignored);
             }
 
-            return finished;
+            return updated;
         }
 
         // Optionally overridable method to get checkpoint state associated with this Distributed train method
@@ -153,11 +153,11 @@ namespace CNTK
             {
                 m_numSamplesSeenInCurrentBlock += info.numberOfSamples;
                 if (m_numSamplesSeenInCurrentBlock < m_syncPeriodPerWorker)
-                    return false;
+                    return true;
 
                 GetParameterValues(gradientValues, parameters);
                 Aggregate(parameters);
-                return false;
+                return true;
             }
 
             GetParameterValues(gradientValues, parameters);
@@ -215,7 +215,7 @@ namespace CNTK
                     break;
                 case Action::Checkpoint:
                     // Somebody still has to call the checkpoint from the outside.
-                    return false;
+                    return true;
                 default:
                     RuntimeError("Unexpected action received.");
                 }
@@ -224,7 +224,7 @@ namespace CNTK
             // Last synchronization
             AggregateImpl(parameters);
             m_shutdown = true;
-            return true; // Make compiler happy.
+            return false; // Make compiler happy.
         }
 
         Action SynchronizeAction(Action self)

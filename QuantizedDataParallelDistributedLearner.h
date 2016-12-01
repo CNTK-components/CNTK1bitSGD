@@ -30,7 +30,7 @@ namespace CNTK
         // Optional override that gets called per minibatch after finishing gradient computation but before updating model parameters
         bool Update(std::vector<std::pair<Parameter, NDArrayViewPtr>>& gradientValues, MinibatchInfo& info, size_t& totalNumberOfSampleSeen) override
         {
-            if (m_totalNumberOfSamplesSeen > m_distributeAfterSamples)
+            if (m_totalNumberOfSamplesSeen >= m_distributeAfterSamples)
             {
                 if (info.IsEmpty())
                     PrepaireZeroGradients(gradientValues, info);
