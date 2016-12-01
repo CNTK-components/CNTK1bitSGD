@@ -138,7 +138,15 @@ namespace CNTK
 
             // TODO: Should be on the higher level of abstraction. Distributed trainer should not even be called during warmup phase.
             if (m_distributeAfterSamples > m_totalNumberOfSamplesSeen)
-                return !m_endOfDataReached;
+            {
+                if (m_endOfDataReached)
+                {
+                    // We have not even reached distributed state.
+                    m_shutdown = true;
+                    return false;
+                }
+                return true;
+            }
 
             std::vector<NDArrayViewPtr> parameters;
             if (!m_endOfDataReached)
