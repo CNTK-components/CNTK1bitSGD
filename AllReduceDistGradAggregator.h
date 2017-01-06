@@ -459,6 +459,7 @@ public:
             assert(numNodesHeadersReceivedFrom == (NumProc() - 1));
         }
 
+#if 0
         std::vector<std::vector<MPI_Request>> recvAggGradStripesQuantizedRequests(numGradMatrices);
         // Initiate receive of stripes of quantized aggregated gradients from different nodes
         for (size_t i = 0; i < numGradMatrices; ++i)
@@ -498,6 +499,19 @@ public:
                 }
             }
         }
+#endif
+        for (size_t i = 0; i < numGradMatrices; ++i)
+        {
+            Stripe stripe = GetStripeForNode(gradients[i]->GetNumCols(), MyRank(), NumProc());
+            if (stripe.m_numCols > 0)
+            {
+                m_aggGradStripeQuantizers[i]->WaitQuantizeAsyncDone();
+
+                memcpy(m_gradQuantized[i]->ColumnSlice(stripe.m_startCol, stripe.m_numCols).Buffer(), aggGradStripesQuantized[i]->Buffer(), aggGradStripesQuantized[i]->GetSize());
+
+                MPI_Bcast(m_gradQuantized[i]->ColumnSlice(stripe.m_startCol, stripe.m_numCols).Buffer(), m_gradQuantized[i]->ColumnSlice(stripe.m_startCol, stripe.m_numCols).GetSize(), MPI_CHAR, MyRank(), m_mpi->Communicator()) || MpiFail("MPI_Bcast");
+            }
+        }
 
         // Initiate send of the aggregate header from main node
         MPI_Bcast(headerCPU, headerCPU->Size(), MPI_CHAR, m_mpi->MainNodeRank(), m_mpi->Communicator()) || MpiFail("MPI_Bcast");
@@ -505,7 +519,7 @@ public:
         // Wait to receive all aggregated stripes and unquantize
         for (size_t i = 0; i < numGradMatrices; ++i)
         {
-            MPI_Waitall(recvAggGradStripesQuantizedRequests[i].size(), recvAggGradStripesQuantizedRequests[i].data(), MPI_STATUSES_IGNORE) || MpiFail("MPI_Waitall");
+            // MPI_Waitall(recvAggGradStripesQuantizedRequests[i].size(), recvAggGradStripesQuantizedRequests[i].data(), MPI_STATUSES_IGNORE) || MpiFail("MPI_Waitall");
 
             m_preAggGradQuantizers[i]->UnquantizeAsync(*(m_gradQuantized[i]), *(gradients[i]), false);
         }
@@ -533,11 +547,13 @@ public:
         if (!m_mpi->IsMainNode())
             MPI_Wait(&sendHeaderRequest, MPI_STATUSES_IGNORE) || MpiFail("MPI_Wait");
 
+        /*
         for (int i = 0; i < sendAggGradStripeQuantizedRequests.size(); ++i)
         {
             if (sendAggGradStripeQuantizedRequests[i].size() > 0)
                 MPI_Waitall(sendAggGradStripeQuantizedRequests[i].size(), sendAggGradStripeQuantizedRequests[i].data(), MPI_STATUSES_IGNORE) || MpiFail("MPI_Waitall");
         }
+        */
 
         if (showSyncPerfStats)
         {
