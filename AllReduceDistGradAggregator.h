@@ -507,9 +507,13 @@ public:
             {
                 m_aggGradStripeQuantizers[i]->WaitQuantizeAsyncDone();
 
+                void *bak;
+                memcpy(bak, m_gradQuantized[i]->ColumnSlice(stripe.m_startCol, stripe.m_numCols).Buffer(), aggGradStripesQuantized[i]->GetSize());
                 memcpy(m_gradQuantized[i]->ColumnSlice(stripe.m_startCol, stripe.m_numCols).Buffer(), aggGradStripesQuantized[i]->Buffer(), aggGradStripesQuantized[i]->GetSize());
 
                 MPI_Bcast(m_gradQuantized[i]->ColumnSlice(stripe.m_startCol, stripe.m_numCols).Buffer(), m_gradQuantized[i]->ColumnSlice(stripe.m_startCol, stripe.m_numCols).GetSize(), MPI_CHAR, MyRank(), m_mpi->Communicator()) || MpiFail("MPI_Bcast");
+
+                memcpy(m_gradQuantized[i]->ColumnSlice(stripe.m_startCol, stripe.m_numCols).Buffer(), bak, aggGradStripesQuantized[i]->GetSize());
             }
         }
 
