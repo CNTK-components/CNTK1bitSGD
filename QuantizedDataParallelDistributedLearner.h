@@ -12,7 +12,7 @@
 #include "CNTKLibrary.h"
 #include "DistributedLearnerBase.h"
 #include "PerformanceProfiler.h"
-
+#include <iostream>
 namespace CNTK
 {
     ///
@@ -47,9 +47,15 @@ namespace CNTK
                 auto value = MakeSharedObject<NDArrayView>(static_cast<double>(info.numberOfSamples), NDShape{ 1 }, DeviceDescriptor::CPUDevice());
                 headerToAggregate.push_back(value);
 
+				std::cout.setf(std::ios::fixed, std::ios::floatfield);
+				std::cout.precision(17);
+				std::cout << "Before agg rank " << m_communicator->CurrentWorker().m_globalRank << "  local loss " << info.trainingLossValue->AsScalar<float>() << " samples " << info.numberOfSamples << std::endl;
+
                 m_communicator->AggregateInPlace(headerToAggregate, m_communicator->Workers());
 
                 info.numberOfSamples = static_cast<size_t>(*headerToAggregate.back()->DataBuffer<double>());
+
+				std::cout << "After agg rank " << m_communicator->CurrentWorker().m_globalRank << "  local loss " << info.trainingLossValue->AsScalar<float>() << " samples " << info.numberOfSamples << std::endl;
 
                 std::vector<NDArrayViewPtr> gradients;
                 for (const auto& i : m_gradientBuffer)

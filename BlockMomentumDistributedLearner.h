@@ -12,6 +12,7 @@
 #include "CNTKLibrary.h"
 #include "DistributedLearnerBase.h"
 #include <numeric>
+#include <iostream>
 
 namespace CNTK
 {
@@ -40,7 +41,10 @@ namespace CNTK
                   resetSGDMomentumAfterAggregation,
                   blockLearningRate,
                   Momentum2TimeConstant(1.0 - 1.0 / (double)communicator->Workers().size(), globalModelAggregationBlockSize))
-        {}
+        {
+			std::cout << "1.0 - 1.0 / (double)communicator->Workers().size() " << 1.0 - 1.0 / (double)communicator->Workers().size() << "  globalModelAggregationBlockSize " << globalModelAggregationBlockSize << std::endl;
+			std::cout << " distributedAfterSamples " << distributedAfterSamples << " useNesterovMomentum " << useNesterovMomentum << " resetSGDMomentumAfterAggregation " << resetSGDMomentumAfterAggregation << " blockLearningRate " << blockLearningRate << std::endl;
+		}
 
         BlockMomentumDistributedLearner(
             DistributedCommunicatorPtr communicator,
@@ -62,6 +66,7 @@ namespace CNTK
             m_localTotalNumSamplesSeen(0),
             m_syncPeriodPerWorker(globalModelAggregationBlockSize / communicator->Workers().size())
         {
+			std::cout << "Momentum received blockMomentumAsTimeConstant " << blockMomentumAsTimeConstant << " m_blockMomentumAsTimeConstantPerWorker " << m_blockMomentumAsTimeConstantPerWorker << std::endl;
             if (m_syncPeriodPerWorker == 0)
                 InvalidArgument("Sync period is too small.");
         }
@@ -385,6 +390,7 @@ namespace CNTK
         void SynchronizeModel(const std::vector<NDArrayViewPtr>& gradientValues)
         {
             ElemType blockMomentum = (ElemType)TimeConstant2Momentum(m_blockMomentumAsTimeConstantPerWorker, m_syncPeriodPerWorker);
+			std::cout << "Block momentum used " << blockMomentum << " m_blockMomentumAsTimeConstantPerWorker "<< m_blockMomentumAsTimeConstantPerWorker << "m_syncPeriodPerWorker " << m_syncPeriodPerWorker <<std::endl;
 
             // 1. Let's aggregate weights
             std::vector<std::shared_ptr<Matrix<ElemType>>> aggregatedWeights;
