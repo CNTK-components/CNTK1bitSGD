@@ -134,6 +134,7 @@ namespace CNTK
             Dictionary result;
             result[L"base"] = DistributedLearnerBase::CreateCheckpoint();
             result[L"localTotalNumSamplesSeen"] = m_localTotalNumSamplesSeen;
+            m_arePrevParametersInitialized = false; // Reinitializing prev weights similar to v1.
             return result;
         }
 
