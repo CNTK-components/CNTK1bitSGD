@@ -17,7 +17,7 @@
 namespace CNTK
 {
     ///
-    /// Block Momentum Trainer.
+    /// Block Momentum distributed learner.
     ///
     class BlockMomentumDistributedLearner : public DistributedLearnerBase
     {
@@ -33,18 +33,18 @@ namespace CNTK
             bool resetSGDMomentumAfterAggregation,
             double blockLearningRate)
             : BlockMomentumDistributedLearner(
-                  communicator,
-                  learner,
-                  distributedAfterSamples,
-                  globalModelAggregationBlockSize,
-                  useNesterovMomentum,
-                  resetSGDMomentumAfterAggregation,
-                  blockLearningRate,
-                  Momentum2TimeConstant(1.0 - 1.0 / (double)communicator->Workers().size(), globalModelAggregationBlockSize))
+                communicator,
+                learner,
+                distributedAfterSamples,
+                globalModelAggregationBlockSize,
+                useNesterovMomentum,
+                resetSGDMomentumAfterAggregation,
+                blockLearningRate,
+                Momentum2TimeConstant(1.0 - 1.0 / (double)communicator->Workers().size(), globalModelAggregationBlockSize))
         {
-			std::cout << "1.0 - 1.0 / (double)communicator->Workers().size() " << 1.0 - 1.0 / (double)communicator->Workers().size() << "  globalModelAggregationBlockSize " << globalModelAggregationBlockSize << std::endl;
-			std::cout << " distributedAfterSamples " << distributedAfterSamples << " useNesterovMomentum " << useNesterovMomentum << " resetSGDMomentumAfterAggregation " << resetSGDMomentumAfterAggregation << " blockLearningRate " << blockLearningRate << std::endl;
-		}
+            std::cout << "1.0 - 1.0 / (double)communicator->Workers().size() " << 1.0 - 1.0 / (double)communicator->Workers().size() << "  globalModelAggregationBlockSize " << globalModelAggregationBlockSize << std::endl;
+            std::cout << " distributedAfterSamples " << distributedAfterSamples << " useNesterovMomentum " << useNesterovMomentum << " resetSGDMomentumAfterAggregation " << resetSGDMomentumAfterAggregation << " blockLearningRate " << blockLearningRate << std::endl;
+        }
 
         BlockMomentumDistributedLearner(
             DistributedCommunicatorPtr communicator,
@@ -66,7 +66,7 @@ namespace CNTK
             m_localTotalNumSamplesSeen(0),
             m_syncPeriodPerWorker(globalModelAggregationBlockSize / communicator->Workers().size())
         {
-			std::cout << "Momentum received blockMomentumAsTimeConstant " << blockMomentumAsTimeConstant << " m_blockMomentumAsTimeConstantPerWorker " << m_blockMomentumAsTimeConstantPerWorker << std::endl;
+            std::cout << "Momentum received blockMomentumAsTimeConstant " << blockMomentumAsTimeConstant << " m_blockMomentumAsTimeConstantPerWorker " << m_blockMomentumAsTimeConstantPerWorker << std::endl;
             if (m_syncPeriodPerWorker == 0)
                 InvalidArgument("Sync period is too small.");
         }
@@ -85,21 +85,24 @@ namespace CNTK
 
             std::sort(parameters.begin(), parameters.end(), [](const Parameter& a, const Parameter& b) { return a.Uid() < b.Uid(); });
 
-            auto profGradientAgg = Microsoft::MSR::CNTK::ProfilerTimeBegin();
-
-            bool updated = PerformDistributedUpdateIfNeeded(parameters, info);
-
-            Microsoft::MSR::CNTK::ProfilerTimeEnd(profGradientAgg, Microsoft::MSR::CNTK::profilerEvtMainGradient);
-
-            // For block momentum the number of aggreagate/checkpoints should match, so for now we ignore the return value of local learners.
+            // In case wheight are not initialized, take the current ones.
+            if (!m_arePrevParametersInitialized)
+            {
+                std::vector<NDArrayViewPtr> parameterValues;
+                GetParameterValues(parameters, parameterValues);
+                Reset(parameterValues);
+                m_arePrevParametersInitialized = true;
+            }
 
             auto profWeights = Microsoft::MSR::CNTK::ProfilerTimeBegin();
-
             if (!info.IsEmpty())
                 m_learner->Update(gradientValues, info.numberOfSamples, info.atEndOfSweep);
-
             Microsoft::MSR::CNTK::ProfilerTimeEnd(profWeights, Microsoft::MSR::CNTK::profilerEvtMainWeights);
 
+            // For block momentum the number of aggreagate/checkpoints should match, so for now we ignore the return value of local learners.
+            auto profGradientAgg = Microsoft::MSR::CNTK::ProfilerTimeBegin();
+            bool updated = PerformDistributedUpdateIfNeeded(parameters, info);
+            Microsoft::MSR::CNTK::ProfilerTimeEnd(profGradientAgg, Microsoft::MSR::CNTK::profilerEvtMainGradient);
             return updated;
         }
 
@@ -142,7 +145,7 @@ namespace CNTK
 
     private:
         // Optional override that gets called per minibatch after finishing gradient computation but before updating model parameters
-        bool PerformDistributedUpdateIfNeeded(std::vector<Parameter>& parameters, MinibatchInfo& info)
+        bool PerformDistributedUpdateIfNeeded(std::vector<Parameter>& parameters, const MinibatchInfo& info)
         {
             // If the last minibatch, set the end of data state.
             if (info.atEndOfData)
@@ -254,7 +257,7 @@ namespace CNTK
             std::vector<size_t> localNumberOfSamples;
             localNumberOfSamples.reserve(m_communicator->Workers().size());
 
-            for (const double* start = buffer; start != bufferEnd; start +=2)
+            for (const double* start = buffer; start != bufferEnd; start += 2)
             {
                 actions.push_back(static_cast<Action>((int)*start));
                 localNumberOfSamples.push_back(static_cast<size_t>(*(start + 1)));
@@ -366,16 +369,14 @@ namespace CNTK
             if (!m_blockLevelSmoothedGradient[index])
             {
                 // has not been initialized yet
-                NDShape shape{ data->GetNumRows(), data->GetNumCols() };
-                auto pSmoothedGrad = std::make_shared<NDArrayView>(AsDataType<ElemType>(), shape, AsDeviceDescriptor(data->GetDeviceId()));
+                auto pSmoothedGrad = std::make_shared<NDArrayView>(AsDataType<ElemType>(), p->Shape(), AsDeviceDescriptor(data->GetDeviceId()));
                 pSmoothedGrad->SetValue(static_cast<ElemType>(0));
                 m_blockLevelSmoothedGradient[index] = pSmoothedGrad;
             }
 
             if (!m_prevParameters[index])
             {
-                NDShape shape{ data->GetNumRows(), data->GetNumCols() };
-                NDArrayViewPtr newValue = std::make_shared<NDArrayView>(AsDataType<ElemType>(), shape, AsDeviceDescriptor(data->GetDeviceId()));
+                NDArrayViewPtr newValue = std::make_shared<NDArrayView>(AsDataType<ElemType>(), p->Shape(), AsDeviceDescriptor(data->GetDeviceId()));
                 std::shared_ptr<Matrix<ElemType>> newData = newValue->GetWritableMatrix<ElemType>();
                 newData->SetValue(*data);
                 m_prevParameters[index] = newValue;
@@ -390,7 +391,7 @@ namespace CNTK
         void SynchronizeModel(const std::vector<NDArrayViewPtr>& gradientValues)
         {
             ElemType blockMomentum = (ElemType)TimeConstant2Momentum(m_blockMomentumAsTimeConstantPerWorker, m_syncPeriodPerWorker);
-			std::cout << "Block momentum used " << blockMomentum << " m_blockMomentumAsTimeConstantPerWorker "<< m_blockMomentumAsTimeConstantPerWorker << "m_syncPeriodPerWorker " << m_syncPeriodPerWorker <<std::endl;
+            std::cout << "Block momentum used " << blockMomentum << " m_blockMomentumAsTimeConstantPerWorker " << m_blockMomentumAsTimeConstantPerWorker << "m_syncPeriodPerWorker " << m_syncPeriodPerWorker << std::endl;
 
             // 1. Let's aggregate weights
             std::vector<std::shared_ptr<Matrix<ElemType>>> aggregatedWeights;
@@ -482,6 +483,9 @@ namespace CNTK
 
         bool m_endOfDataReached;
 
+        // Flag indicating whether previous weights and smooth gradients were initialized.
+        bool m_arePrevParametersInitialized {false};
+
         DISABLE_COPY_AND_MOVE(BlockMomentumDistributedLearner);
-     };
+    };
 }
