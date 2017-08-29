@@ -135,13 +135,61 @@ namespace CNTK
             result[L"base"] = DistributedLearnerBase::CreateCheckpoint();
             result[L"localTotalNumSamplesSeen"] = m_localTotalNumSamplesSeen;
             m_arePrevParametersInitialized = false; // Reinitializing prev weights similar to v1.
+
+            std::vector<DictionaryValue> serializedSmoothedGradients(m_blockLevelSmoothedGradient.size());
+            for (size_t i = 0; i < m_blockLevelSmoothedGradient.size(); ++i)
+            {
+                serializedSmoothedGradients[i] = *m_blockLevelSmoothedGradient[i];
+            }
+
+            result[L"blockLevelSmoothedGradient"] = serializedSmoothedGradients;
             return result;
         }
 
         void RestoreFromCheckpoint(const Dictionary& checkpoint) override
         {
-            m_localTotalNumSamplesSeen = checkpoint[L"localTotalNumSamplesSeen"].Value<size_t>();
             DistributedLearnerBase::RestoreFromCheckpoint(checkpoint[L"base"].Value<Dictionary>());
+
+            std::vector<NDArrayViewPtr> parameterValues;
+            std::vector<Parameter> parameters(m_learner->Parameters());
+            std::sort(parameters.begin(), parameters.end(), [](const Parameter& a, const Parameter& b) { return a.Uid() < b.Uid(); });
+
+            GetParameterValues(parameters, parameterValues);
+            Reset(parameterValues);
+
+            m_localTotalNumSamplesSeen = checkpoint[L"localTotalNumSamplesSeen"].Value<size_t>();
+            if (checkpoint.Contains(L"blockLevelSmoothedGradient"))
+            {
+                auto getSmoothedGradValue = [&checkpoint](size_t i, const Parameter& parameter) -> const DictionaryValue&
+                {
+                    const auto& uid = parameter.Uid();
+                    const auto& values = checkpoint[L"blockLevelSmoothedGradient"].Value<std::vector<DictionaryValue>>();
+
+                    if (values.size() <= i)
+                        LogicError("Checkpoint does not contain smoothed gradient value for parameter '%S' (uid=%S).",
+                            parameter.AsString().c_str(), uid.c_str());
+                    return values[i];
+                };
+
+                for (auto i = 0; i < parameters.size(); i++)
+                {
+                    const auto& parameter = parameters[i];
+                    const auto& uid = parameter.Uid();
+                    const NDArrayView& checkpointedValue = getSmoothedGradValue(i, parameter).Value<NDArrayView>();
+
+                    const auto& smoothedGradientValue = m_blockLevelSmoothedGradient[i];
+
+                    if (smoothedGradientValue->GetDataType() != checkpointedValue.GetDataType())
+                        LogicError("DataType of the smoothed gradient value restored from checkpoint for the parameter '%S' (uid = %ls) does not match the expected value.",
+                            parameter.AsString().c_str(), uid.c_str());
+
+                    if (smoothedGradientValue->Shape() != checkpointedValue.Shape())
+                        LogicError("Shape '%S' of the smoothed gradient value restored from checkpoint for the parameter '%S' (uid = %ls) does not match the expected value.",
+                            smoothedGradientValue->Shape().AsString().c_str(), parameter.AsString().c_str(), uid.c_str());
+
+                    smoothedGradientValue->CopyFrom(checkpointedValue);
+                }
+            }
         }
 
     private:
