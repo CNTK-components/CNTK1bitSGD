@@ -64,7 +64,8 @@ namespace CNTK
             m_numSamplesSeenInCurrentBlock(0),
             m_endOfDataReached(false),
             m_localTotalNumSamplesSeen(0),
-            m_syncPeriodPerWorker(globalModelAggregationBlockSize / communicator->Workers().size())
+            m_syncPeriodPerWorker(globalModelAggregationBlockSize / communicator->Workers().size()),
+            m_syncNumber(1)
         {
             std::cout << "Momentum received blockMomentumAsTimeConstant " << blockMomentumAsTimeConstant << " m_blockMomentumAsTimeConstantPerWorker " << m_blockMomentumAsTimeConstantPerWorker << std::endl;
             if (m_syncPeriodPerWorker == 0)
@@ -143,6 +144,7 @@ namespace CNTK
             }
 
             result[L"blockLevelSmoothedGradient"] = serializedSmoothedGradients;
+            m_syncNumber = 1;
             return result;
         }
 
@@ -440,7 +442,7 @@ namespace CNTK
         void SynchronizeModel(const std::vector<NDArrayViewPtr>& gradientValues)
         {
             ElemType blockMomentum = (ElemType)TimeConstant2Momentum(m_blockMomentumAsTimeConstantPerWorker, m_syncPeriodPerWorker);
-            std::cout << "Block momentum used " << blockMomentum << " m_blockMomentumAsTimeConstantPerWorker " << m_blockMomentumAsTimeConstantPerWorker << "m_syncPeriodPerWorker " << m_syncPeriodPerWorker << std::endl;
+            fprintf(stderr, "%d-th sync point was hit\n", m_syncNumber++);
 
             // 1. Let's aggregate weights
             std::vector<std::shared_ptr<Matrix<ElemType>>> aggregatedWeights;
@@ -531,6 +533,7 @@ namespace CNTK
         std::vector<NDArrayViewPtr> m_actionBuffer;
 
         bool m_endOfDataReached;
+        int m_syncNumber;
 
         // Flag indicating whether previous weights and smooth gradients were initialized.
         bool m_arePrevParametersInitialized {false};
