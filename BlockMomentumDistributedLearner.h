@@ -166,6 +166,12 @@ namespace CNTK
         }
 
     private:
+        // Block momentum needs aggregation of loss and eval across workers.
+        virtual bool IsLossEvalAggregationNeededBeforeReporting()
+        {
+            return true;
+        }
+
         // Optional override that gets called per minibatch after finishing gradient computation but before updating model parameters
         bool PerformDistributedUpdateIfNeeded(std::vector<NDArrayViewPtr>& parameterValues, MinibatchInfo& info)
         {
