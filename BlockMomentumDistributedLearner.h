@@ -231,7 +231,7 @@ namespace CNTK
                     case Action::Aggregate:                        
                         AggregateImpl(paramValues);
                         break;
-                    // Can't do checkpointing so return.
+                    // Can't do checkpointing here so return. Checkpointing will be called again eventually.
                     case Action::Checkpoint:
                         return;
                     case Action::Shutdown:
