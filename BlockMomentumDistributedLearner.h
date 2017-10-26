@@ -12,14 +12,31 @@
 #include "CNTKLibrary.h"
 #include "DistributedLearnerBase.h"
 #include <numeric>
-
+#include <iostream>
 namespace CNTK
 {
+    
     ///
     /// Block Momentum Trainer.
     ///
     class BlockMomentumDistributedLearner : public DistributedLearnerBase
     {
+#define DEBUG_COUT 
+        enum class Action;
+        friend std::ostream& operator<<(std::ostream& out, const Action action)
+        {
+            static std::map<Action, std::string> actionStr;
+            if (actionStr.size() == 0)
+            {
+                actionStr[Action::Aggregate] = "Aggregate";
+                actionStr[Action::AggregateMetrics] = "AggregateMetrics";
+                actionStr[Action::Checkpoint] = "Checkpoint";
+                actionStr[Action::Shutdown] = "Shutdown";
+                actionStr[Action::Wait] = "Wait";
+            }
+            return out << actionStr[action];
+        }
+
         template<class T> using Matrix = Microsoft::MSR::CNTK::Matrix<T>;
 
     public:
@@ -123,6 +140,10 @@ namespace CNTK
             Action action;
             while ((action = SynchronizeAction(Action::Checkpoint)) != Action::Checkpoint)
             {
+#ifdef DEBUG_COUT
+                std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action req " << Action::Checkpoint << " Action returned " << action << std::endl;
+                std::cout.flush();
+#endif
                 if (action == Action::Wait)
                     continue;
                 if (action == Action::Aggregate)
@@ -130,7 +151,10 @@ namespace CNTK
                 else
                     RuntimeError("Unexpected action received.");
             }
-
+#ifdef DEBUG_COUT
+            std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action req " << Action::Checkpoint << " Action returned " << action << std::endl;
+            std::cout.flush();
+#endif
             // Always aggregate before the checkpoint, so prevParameter and m_numSamplesSeenInCurrentBlock don't need to be saved
             SynchronizeAction(Action::Aggregate);
             AggregateImpl(values);
@@ -167,9 +191,95 @@ namespace CNTK
 
     private:
         // Block momentum needs aggregation of loss and eval across workers.
-        virtual bool IsLossEvalAggregationNeededBeforeReporting()
+
+        virtual void DoMetricsAggregationIfNeeded(AccumulatorPtr& localTrainingLoss, AccumulatorPtr& localEvalCriterion) override
         {
-            return true;
+            static bool shutDownSeenBefore = false;
+#ifdef DEBUG_COUT
+            std::cout << "Entering DoMetricsAggregationIfNeeded " << m_communicator->CurrentWorker().m_globalRank << std::endl;
+            std::cout.flush();
+#endif
+            // If shutdown has been agreed upon before, then return. Other workers won't be able to sync now.
+            if (m_communicator->Workers().size() == 1 || shutDownSeenBefore)
+            {
+                return;
+            }
+            /*
+            if (localTrainingLoss && localTrainingLoss->IsInitialized())
+            {
+                localTrainingLoss->CopyFrom(Value(std::make_shared<NDArrayView>(10.0f, NDShape{}, DeviceDescriptor::CPUDevice())));
+            }
+
+            if (localEvalCriterion && localEvalCriterion->IsInitialized())
+            {
+                localEvalCriterion->CopyFrom(Value(std::make_shared<NDArrayView>(20.0f, NDShape{}, DeviceDescriptor::CPUDevice())));
+            }
+            */
+            Action action;
+            while ((action = SynchronizeAction(Action::AggregateMetrics)) != Action::AggregateMetrics)
+            {
+#ifdef DEBUG_COUT
+                std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action req " << Action::AggregateMetrics << " Action returned " << action << std::endl;
+                std::cout.flush();
+#endif
+                std::vector<NDArrayViewPtr> paramValues;
+                GetParameterValues(m_learner->Parameters(), paramValues);
+
+                switch (action)
+                {
+                    // Aggregate params and try for aggregate metrics again
+                    case Action::Aggregate:                        
+                        AggregateImpl(paramValues);
+                        break;
+                    // Can't do checkpointing so return.
+                    case Action::Checkpoint:
+                        return;
+                    case Action::Shutdown:
+                        shutDownSeenBefore = true;
+                        return; // Can't aggregate if another worker is in shutdown mode
+                }
+            }
+#ifdef DEBUG_COUT
+            std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action req " << Action::AggregateMetrics << " Actino returned " << action << std::endl;
+            std::cout.flush();
+#endif
+            // Synchronization complete - Start the loss and eval aggregation
+            float averageTrainingLoss = 0;
+            bool aggregateTrainingLoss = false;
+            if (localTrainingLoss && localTrainingLoss->IsInitialized())
+            {
+                averageTrainingLoss = localTrainingLoss->AsScalar<float>();
+                aggregateTrainingLoss = true;
+            }
+
+            float averageEvalCriterion = 0;
+            bool aggregateEvalCriterion = false;
+            if (localEvalCriterion && localEvalCriterion->IsInitialized())
+            {
+                averageEvalCriterion = localEvalCriterion->AsScalar<float>();
+                aggregateEvalCriterion = true;
+            }
+
+            NDArrayViewPtr inPlaceAggregateTrainingLoss = std::make_shared<NDArrayView>(averageTrainingLoss, NDShape{}, DeviceDescriptor::CPUDevice());
+            NDArrayViewPtr inPlaceAggregateEvalCriterion = std::make_shared<NDArrayView>(averageEvalCriterion, NDShape{}, DeviceDescriptor::CPUDevice());
+            vector<NDArrayViewPtr> inPlaceAggregateVector = { inPlaceAggregateTrainingLoss, inPlaceAggregateEvalCriterion };
+
+            //if (aggregateTrainingLoss || aggregateEvalCriterion)
+            {
+                m_communicator->AggregateInPlace(inPlaceAggregateVector, m_communicator->Workers());
+            }
+
+            if (aggregateTrainingLoss)
+            {
+                inPlaceAggregateTrainingLoss->SetValue(inPlaceAggregateTrainingLoss->AsScalar<float>() / m_communicator->Workers().size());
+                localTrainingLoss->CopyFrom(Value(inPlaceAggregateTrainingLoss));
+            }
+
+            if (aggregateEvalCriterion)
+            {
+                inPlaceAggregateEvalCriterion->SetValue(inPlaceAggregateEvalCriterion->AsScalar<float>() / m_communicator->Workers().size());
+                localEvalCriterion->CopyFrom(Value(inPlaceAggregateEvalCriterion));
+            }
         }
 
         // Optional override that gets called per minibatch after finishing gradient computation but before updating model parameters
@@ -210,6 +320,7 @@ namespace CNTK
         // decide what to do next.
         // The priority of actons are:
         // 1) If any worker wants to aggregate - aggregation is done.
+        // 2) If any worker wants to aggregate metrics -- then aggregate metrics is done.
         // 2) If any worker wants to checkpoint and nobody wants to aggregate - checkpointing is done.
         // 3) If all want to shutdown - it means we reached the end of the data and shutdown can be done.
         // The priority above eliminate resolves situations when some of the workers run out of data
@@ -218,6 +329,7 @@ namespace CNTK
         {
             Wait, // Waits in the current state without doing anything.
             Aggregate,
+            AggregateMetrics, // Used to allow aggregation of loss and eval metrics.
             Checkpoint,
             Shutdown
         };
@@ -245,6 +357,10 @@ namespace CNTK
             Action action;
             while ((action = SynchronizeAction(Action::Shutdown)) != Action::Shutdown)
             {
+#ifdef DEBUG_COUT
+                std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action req " << Action::Shutdown << " Action returned " << action << std::endl;
+                std::cout.flush();
+#endif
                 switch (action)
                 {
                 case Action::Aggregate:
@@ -253,16 +369,25 @@ namespace CNTK
                 case Action::Checkpoint:
                     // Somebody still has to call the checkpoint from the outside.
                     return true;
+                case Action::Wait:
+                    // Someone is in aggregate metrics. Wait for it to come to shutdown.
+                    continue;
                 default:
                     RuntimeError("Unexpected action received.");
                 }
             }
-
+#ifdef DEBUG_COUT
+            std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action req " << Action::Shutdown << " Action returned " << action << std::endl;
+            std::cout.flush();
+#endif
             // Last synchronization
             AggregateImpl(parameters);
             return false; // Make compiler happy.
         }
 
+        // Synchronize(Agree) on action before doing it. This is needed to prevent deadlock in MPI. 
+        // Aggregate is highest priority. So AggregateImpl can be called after calling SynchronizeAction(Action::Aggreagte). 
+        // Others need to ask for permission in a loop
         Action SynchronizeAction(Action self)
         {
             assert(self == Action::Checkpoint || self == Action::Aggregate || self == Action::Shutdown);
@@ -289,6 +414,10 @@ namespace CNTK
             }
             m_sampleCount = std::accumulate(localNumberOfSamples.begin(), localNumberOfSamples.end(), (size_t)0);
 
+            // If all want to aggregate only then we aggregate
+            if (std::all_of(actions.begin(), actions.end(), [](Action c) { return c == Action::AggregateMetrics; }))
+                return Action::AggregateMetrics;
+
             // If all want to shutdown - we shutdown.
             if (std::all_of(actions.begin(), actions.end(), [](Action c) { return c == Action::Shutdown; }))
                 return Action::Shutdown;
@@ -297,20 +426,56 @@ namespace CNTK
             if (std::all_of(actions.begin(), actions.end(), [](Action c) { return c == Action::Checkpoint; }))
                 return Action::Checkpoint;
 
-            // If some are in the shutdown state - we return checkpoint for those, but 
-            // for those who are in checkpoint state - they have to wait.
-            if (std::all_of(actions.begin(), actions.end(), [](Action c) { return c == Action::Checkpoint || c == Action::Shutdown; }))
+            // If worker A in the shutdown state and another one wants checkpoint, we return checkpoint for worker A  else shutdown ie ignore AggregateMetrics 
+            // If worker A in the checkpoint state and another one B wants shutdown, we return wait for worker A to allow B to come in checkpoint. Otherwise checkpoint ie ignore AggregateMetrics
+            // If worker A in the aggregateMetrics state and another one B wants shutdown, we return since B can't aggregate now.
+            // If worker A in the aggregateMetrics state and another one B wants checkpoint, we return checkpoint and have A do checkpoint.
+            
+            if (std::all_of(actions.begin(), actions.end(), [](Action c) { return c == Action::Checkpoint || c == Action::Shutdown || c == Action::AggregateMetrics; }))
             {
+                bool isAnyCheckpoint = std::any_of(actions.begin(), actions.end(), [](Action c) { return c == Action::Checkpoint; });
+                bool isAnyShutdown = std::any_of(actions.begin(), actions.end(), [](Action c) { return c == Action::Shutdown; });
+                bool isAnyAggregateMetrics = std::any_of(actions.begin(), actions.end(), [](Action c) { return c == Action::AggregateMetrics; });
                 if (self == Action::Shutdown)
-                    return Action::Checkpoint;
-                else
                 {
-                    assert(self == Action::Checkpoint);
-                    return Action::Wait;
+                    // Do checkpoint if any other requests checkpoint.
+                    if (isAnyCheckpoint)
+                    {
+                        return Action::Checkpoint;
+                    }
+
+                    // Allow the aggregate metrics to come in shutdown state and request again.
+                    if (isAnyAggregateMetrics)
+                    {
+                        return Action::Wait;
+                    }
+
+                    return Action::Shutdown;
+                }
+                else if (self == Action::Checkpoint)
+                {
+                    // Wait for other in shutdown or aggregate metrics state to come to checkpoint state
+                    if (isAnyShutdown || isAnyAggregateMetrics)
+                    {
+                        return Action::Wait;
+                    }
+
+                    return Action::Checkpoint;
+                }
+                else if (self == Action::AggregateMetrics)
+                {
+                    // AggregateMetrics can't do aggregate metrics if anyone is in shutdown
+                    if (isAnyShutdown)
+                    {
+                        return Action::Shutdown;
+                    }
+
+                    // If all others are either metrics aggregate or checkpoint then state returned is checkpoint and we don't do metrics aggregation
+                    return Action::Checkpoint;
                 }
             }
 
-            // Otherwise we always aggregate.
+            // Otherwise we aggregate. This is handled by all.
             return Action::Aggregate;
         }
 
@@ -336,6 +501,10 @@ namespace CNTK
             Action action;
             while ((action = SynchronizeAction(Action::Checkpoint)) != Action::Checkpoint)
             {
+#ifdef DEBUG_COUT
+                std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action req " << Action::Checkpoint << " Action returned " << action << std::endl;
+                std::cout.flush();
+#endif
                 if (action == Action::Wait)
                     continue;
                 if (action == Action::Aggregate)
@@ -343,7 +512,10 @@ namespace CNTK
                 else
                     RuntimeError("Unexpected action received.");
             }
-
+#ifdef DEBUG_COUT
+            std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action req " << Action::Checkpoint << " Action returned " << action << std::endl;
+            std::cout.flush();
+#endif
             return DistributedLearnerBase::CreateCheckpoint();
         }
 
