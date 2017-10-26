@@ -21,7 +21,7 @@ namespace CNTK
     ///
     class BlockMomentumDistributedLearner : public DistributedLearnerBase
     {
-#define DEBUG_COUT 
+//#define DEBUG_COUT 
         enum class Action;
         friend std::ostream& operator<<(std::ostream& out, const Action action)
         {
