@@ -19,7 +19,6 @@
 #endif 
 namespace CNTK
 {
-    
     ///
     /// Block Momentum Trainer.
     ///
@@ -382,7 +381,7 @@ namespace CNTK
         // Others need to ask for permission in a loop
         Action SynchronizeAction(Action self)
         {
-            assert(self == Action::Checkpoint || self == Action::Aggregate || self == Action::Shutdown);
+            assert(self == Action::Checkpoint || self == Action::Aggregate || self == Action::Shutdown || self == Action::AggregateMetrics);
 
             double data[2] = { static_cast<double>(self), static_cast<double>(m_localTotalNumSamplesSeen) };
             auto a = std::make_shared<NDArrayView>(DataType::Double, NDShape{ 2 }, &data, sizeof(double) * 2, DeviceDescriptor::CPUDevice());
@@ -406,7 +405,7 @@ namespace CNTK
             }
             m_sampleCount = std::accumulate(localNumberOfSamples.begin(), localNumberOfSamples.end(), (size_t)0);
 
-            // If all want to aggregate only then we aggregate
+            // If all want to aggregate metrics, only then we aggregate metrics.
             if (std::all_of(actions.begin(), actions.end(), [](Action c) { return c == Action::AggregateMetrics; }))
                 return Action::AggregateMetrics;
 
