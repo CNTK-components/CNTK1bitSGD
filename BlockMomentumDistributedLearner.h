@@ -12,11 +12,9 @@
 #include "CNTKLibrary.h"
 #include "DistributedLearnerBase.h"
 #include <numeric>
-
-//#define ENABLE_BMUF_DEBUG_OUT
-#ifdef ENABLE_BMUF_DEBUG_OUT
 #include <iostream>
-#endif 
+#include <sstream>
+
 namespace CNTK
 {
     ///
@@ -24,7 +22,7 @@ namespace CNTK
     ///
     class BlockMomentumDistributedLearner : public DistributedLearnerBase
     {
-        #ifdef ENABLE_BMUF_DEBUG_OUT
+    private:
         enum class Action;
         friend std::ostream& operator<<(std::ostream& out, const Action action)
         {
@@ -39,7 +37,17 @@ namespace CNTK
             }
             return out << actionStr[action];
         }
-        #endif
+
+        // Print debug info about synchronization action requested and granted
+        void DebugPrintSynchronizeInfo(Action requestedAction, Action grantedAction)
+        {
+            if (GetTraceLevel() >= TraceLevel::Info)
+            {
+                std::ostringstream outString;
+                outString << "BMUF Rank " << m_communicator->CurrentWorker().m_globalRank << " Action requested " << requestedAction << " Action returned " << grantedAction << std::endl;
+                std::cout << outString.str();
+            }
+        }
 
         template<class T> using Matrix = Microsoft::MSR::CNTK::Matrix<T>;
 
@@ -144,9 +152,7 @@ namespace CNTK
             Action action;
             while ((action = SynchronizeAction(Action::Checkpoint)) != Action::Checkpoint)
             {
-                #ifdef ENABLE_BMUF_DEBUG_OUT
-                std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action requested " << Action::Checkpoint << " Action returned " << action << std::endl;
-                #endif
+                DebugPrintSynchronizeInfo(Action::Checkpoint, action);
 
                 if (action == Action::Wait)
                     continue;
@@ -155,9 +161,8 @@ namespace CNTK
                 else
                     RuntimeError("Unexpected action received.");
             }
-            #ifdef ENABLE_BMUF_DEBUG_OUT
-            std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action requested " << Action::Checkpoint << " Action returned " << action << std::endl;
-            #endif
+
+            DebugPrintSynchronizeInfo(Action::Checkpoint, action);
 
             // Always aggregate before the checkpoint, so prevParameter and m_numSamplesSeenInCurrentBlock don't need to be saved
             SynchronizeAction(Action::Aggregate);
@@ -195,15 +200,13 @@ namespace CNTK
 
     private:
         // Block momentum needs to do aggregation of loss and eval across workers.
-        virtual void DoMetricsAggregationIfNeeded(AccumulatorPtr& localTrainingLoss, AccumulatorPtr& localEvalCriterion) override
+        virtual void DoAggregateMetricsIfNeeded(NDArrayViewPtr& localTrainingLoss, NDArrayViewPtr& localEvalCriterion) override
         {
-            #ifdef ENABLE_BMUF_DEBUG_OUT
             std::cout << "Entering DoMetricsAggregationIfNeeded " << m_communicator->CurrentWorker().m_globalRank << std::endl;
-            #endif
 
-            static bool shutDownSeenBefore = false;
+            this->m_shutDownSeenBefore = false;
             // If shutdown has been agreed upon before, then return from metrics aggregation. Other shutdown workers won't be able to sync now.
-            if (m_communicator->Workers().size() == 1 || shutDownSeenBefore)
+            if (m_communicator->Workers().size() == 1 || this->m_shutDownSeenBefore)
             {
                 return;
             }
@@ -211,9 +214,7 @@ namespace CNTK
             Action action;
             while ((action = SynchronizeAction(Action::AggregateMetrics)) != Action::AggregateMetrics)
             {
-                #ifdef ENABLE_BMUF_DEBUG_OUT
-                std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action requested " << Action::AggregateMetrics << " Action returned " << action << std::endl;
-                #endif
+                DebugPrintSynchronizeInfo(Action::AggregateMetrics, action);
 
                 std::vector<NDArrayViewPtr> paramValues;
                 GetParameterValues(m_learner->Parameters(), paramValues);
@@ -229,29 +230,24 @@ namespace CNTK
                         return;
                     // Can't aggregate metrics since others are going in shutdown. 
                     case Action::Shutdown:
-                        shutDownSeenBefore = true;
+                        this->m_shutDownSeenBefore = true;
                         return; // Can't aggregate if another worker is in shutdown mode
                 }
             }
-            #ifdef ENABLE_BMUF_DEBUG_OUT
-            std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action requested " << Action::AggregateMetrics << " Action returned " << action << std::endl;
-            #endif
+
+            DebugPrintSynchronizeInfo(Action::AggregateMetrics, action);
 
             // Synchronization complete - Start the loss and eval aggregation
             float averageTrainingLoss = 0;
-            bool aggregateTrainingLoss = false;
-            if (localTrainingLoss && localTrainingLoss->IsInitialized())
+            if (localTrainingLoss)
             {
                 averageTrainingLoss = localTrainingLoss->AsScalar<float>();
-                aggregateTrainingLoss = true;
             }
 
             float averageEvalCriterion = 0;
-            bool aggregateEvalCriterion = false;
-            if (localEvalCriterion && localEvalCriterion->IsInitialized())
+            if (localEvalCriterion)
             {
                 averageEvalCriterion = localEvalCriterion->AsScalar<float>();
-                aggregateEvalCriterion = true;
             }
 
             NDArrayViewPtr inPlaceAggregateTrainingLoss = std::make_shared<NDArrayView>(averageTrainingLoss, NDShape{}, DeviceDescriptor::CPUDevice());
@@ -260,16 +256,16 @@ namespace CNTK
 
             m_communicator->AggregateInPlace(inPlaceAggregateVector, m_communicator->Workers());
             
-            if (aggregateTrainingLoss)
+            if (localTrainingLoss)
             {
                 inPlaceAggregateTrainingLoss->SetValue(inPlaceAggregateTrainingLoss->AsScalar<float>() / m_communicator->Workers().size());
-                localTrainingLoss->CopyFrom(Value(inPlaceAggregateTrainingLoss));
+                localTrainingLoss->CopyFrom(*inPlaceAggregateTrainingLoss);
             }
 
-            if (aggregateEvalCriterion)
+            if (localEvalCriterion)
             {
                 inPlaceAggregateEvalCriterion->SetValue(inPlaceAggregateEvalCriterion->AsScalar<float>() / m_communicator->Workers().size());
-                localEvalCriterion->CopyFrom(Value(inPlaceAggregateEvalCriterion));
+                localEvalCriterion->CopyFrom(*inPlaceAggregateEvalCriterion);
             }
         }
 
@@ -348,9 +344,7 @@ namespace CNTK
             Action action;
             while ((action = SynchronizeAction(Action::Shutdown)) != Action::Shutdown)
             {
-                #ifdef ENABLE_BMUF_DEBUG_OUT
-                std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action requested " << Action::Shutdown << " Action returned " << action << std::endl;
-                #endif
+                DebugPrintSynchronizeInfo(Action::Shutdown, action);
 
                 switch (action)
                 {
@@ -367,9 +361,8 @@ namespace CNTK
                     RuntimeError("Unexpected action received.");
                 }
             }
-            #ifdef ENABLE_BMUF_DEBUG_OUT
-            std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action req " << Action::Shutdown << " Action returned " << action << std::endl;
-            #endif
+
+            DebugPrintSynchronizeInfo(Action::Shutdown, action);
 
             // Last synchronization
             AggregateImpl(parameters);
@@ -417,6 +410,9 @@ namespace CNTK
             if (std::all_of(actions.begin(), actions.end(), [](Action c) { return c == Action::Checkpoint; }))
                 return Action::Checkpoint;
 
+            // If all are either in Checkpoint, Shutdown or AggregateMetrics, 
+            //      Then AggregateMetrics state has lowest priority. Workers in it return without doing anything. Other workers wait for Aggregate Metrics to come in their state.
+            //      Between Checkpoint and Shutdown, Shutdown has lower priority. Shutdown worker will return and checkpoint worker will wait for others to come in checkpoint state.
             if (std::all_of(actions.begin(), actions.end(), [](Action c) { return c == Action::Checkpoint || c == Action::Shutdown || c == Action::AggregateMetrics; }))
             {
                 bool isAnyCheckpoint = std::any_of(actions.begin(), actions.end(), [](Action c) { return c == Action::Checkpoint; });
@@ -461,7 +457,7 @@ namespace CNTK
                 }
             }
 
-            // Otherwise we aggregate. This is handled by all.
+            // Otherwise we aggregate. This is given priority by all other workers in checkpoint, shutdown or aggregate metrics states.
             return Action::Aggregate;
         }
 
@@ -487,9 +483,7 @@ namespace CNTK
             Action action;
             while ((action = SynchronizeAction(Action::Checkpoint)) != Action::Checkpoint)
             {
-                #ifdef ENABLE_BMUF_DEBUG_OUT
-                std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action req " << Action::Checkpoint << " Action returned " << action << std::endl;
-                #endif
+                DebugPrintSynchronizeInfo(Action::Checkpoint, action);
 
                 if (action == Action::Wait)
                     continue;
@@ -498,9 +492,8 @@ namespace CNTK
                 else
                     RuntimeError("Unexpected action received.");
             }
-            #ifdef ENABLE_BMUF_DEBUG_OUT
-            std::cout << "rank " << m_communicator->CurrentWorker().m_globalRank << " Action req " << Action::Checkpoint << " Action returned " << action << std::endl;
-            #endif
+
+            DebugPrintSynchronizeInfo(Action::Checkpoint, action);
 
             return DistributedLearnerBase::CreateCheckpoint();
         }
@@ -663,6 +656,7 @@ namespace CNTK
         bool m_prevParamInitialized = false;
 
         bool m_endOfDataReached;
+        bool m_shutDownSeenBefore = false;
 
         DISABLE_COPY_AND_MOVE(BlockMomentumDistributedLearner);
      };
