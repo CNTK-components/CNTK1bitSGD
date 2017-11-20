@@ -45,7 +45,7 @@ namespace CNTK
             {
                 std::ostringstream outString;
                 outString << "BMUF Rank " << m_communicator->CurrentWorker().m_globalRank << " Action requested " << requestedAction << " Action returned " << grantedAction << std::endl;
-                std::cout << outString.str();
+                std::cerr << outString.str(); //stderr output
             }
         }
 
@@ -202,11 +202,9 @@ namespace CNTK
         // Block momentum needs to do aggregation of loss and eval across workers.
         virtual void DoAggregateMetricsIfNeeded(NDArrayViewPtr& localTrainingLoss, NDArrayViewPtr& localEvalCriterion) override
         {
-            std::cout << "Entering DoMetricsAggregationIfNeeded " << m_communicator->CurrentWorker().m_globalRank << std::endl;
-
-            this->m_shutDownSeenBefore = false;
+            m_shutDownSeenBefore = false;
             // If shutdown has been agreed upon before, then return from metrics aggregation. Other shutdown workers won't be able to sync now.
-            if (m_communicator->Workers().size() == 1 || this->m_shutDownSeenBefore)
+            if (m_communicator->Workers().size() == 1 || m_shutDownSeenBefore)
             {
                 return;
             }
@@ -230,7 +228,7 @@ namespace CNTK
                         return;
                     // Can't aggregate metrics since others are going in shutdown. 
                     case Action::Shutdown:
-                        this->m_shutDownSeenBefore = true;
+                        m_shutDownSeenBefore = true;
                         return; // Can't aggregate if another worker is in shutdown mode
                 }
             }
