@@ -75,7 +75,7 @@ namespace CNTK
         {
             CheckWorkers(sendToWorkers);
 
-            if (Workers().size() == 1) // No need to aggregate anything.
+            if (Workers().size() == 1 && !ALWAYS_COMMUNICATE) // No need to aggregate anything.
             {
                 aggregatedOutputs = inValues;
                 newQuantizationResidues = valueQuantizationResidues;
@@ -127,6 +127,11 @@ namespace CNTK
             const std::unordered_set<DistributedWorkerDescriptor>& sendToWorkers) override
         {
             Base::Aggregate(values, outputValues, sendToWorkers);
+        }
+
+        void AllReduceSparseBlockColumn(std::vector<NDArrayViewPtr>& sbcValues)
+        {
+            Base::AllReduceSparseBlockColumn(sbcValues);
         }
 
         void Barrier() override
